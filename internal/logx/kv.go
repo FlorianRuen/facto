@@ -184,10 +184,23 @@ func skipSpaces(s string, i int) int {
 // An unquoted value ends at whitespace or at one of `&;,"'` + "`" + `\<>()[]{}`;
 // a quoted one at its closing quote (backslash escapes honoured). A value
 // that is itself an authorization scheme (Authorization: Bearer v) keeps the
-// scheme and masks what follows it. The scan jumps from candidate to
+// scheme and masks what follows it.
+//
+// Header lines go further, up to the end of the line ("\r" or "\n"), when
+// the key is unquoted, holds "cookie" or "authorization" (Set-Cookie,
+// Proxy-Authorization) and the separator is ":". An authorization line is
+// masked whole after its Bearer or Basic scheme, or whole when the scheme is
+// another one (Token, Digest, Negotiate…). A cookie line has its first value
+// masked as above, then every later pair's value and every bare token,
+// except the Set-Cookie attributes (see isCookieAttr), which are kept. A
+// header value opening with "[" (fmt's rendering of an http.Header, all
+// headers on one line) ends at the next "]" instead of the end of the line.
+//
+// The scan jumps from candidate to
 // candidate (a separator, or a "b" that may start a scheme) with
 // strings.IndexAny; the key before a separator lies between it and the
-// previous separator, so it runs in time linear in len(s).
+// previous separator, and a header line is consumed once, so it runs in
+// time linear in len(s).
 func maskKeyValues(s string) string {
 	const candidates = ":=bB"
 	var b strings.Builder
@@ -198,10 +211,10 @@ func maskKeyValues(s string) string {
 			break
 		}
 		p += i
-		var vs, ve int
+		var vs, ve, rest int
 		var ok bool
 		if c := s[p]; c == ':' || c == '=' {
-			vs, ve, ok = valueAfterKey(s, p)
+			vs, ve, rest, ok = valueAfterKey(s, p)
 		} else {
 			vs, ve, ok = valueAfterScheme(s, p)
 		}
@@ -215,6 +228,10 @@ func maskKeyValues(s string) string {
 			done = ve
 		}
 		i = max(ve, p+1)
+		if rest > ve {
+			done = maskCookieRest(&b, s, done, ve, rest)
+			i = rest
+		}
 	}
 	if done == 0 {
 		return s
@@ -244,17 +261,74 @@ func valueAfterScheme(s string, p int) (vs, ve int, ok bool) {
 	return k, unquotedEnd(s, k), true
 }
 
+// headerKind tells which header-line rule applies after a key.
+type headerKind int
+
+const (
+	headerNone headerKind = iota
+	headerCookie
+	headerAuthorization
+)
+
+// keyHeaderKind returns the header-line rule of an unquoted key followed by
+// sep.
+func keyHeaderKind(key string, sep byte) headerKind {
+	switch {
+	case sep != ':':
+		return headerNone
+	case containsLowerASCII(key, "authorization"):
+		return headerAuthorization
+	case containsLowerASCII(key, "cookie"):
+		return headerCookie
+	}
+	return headerNone
+}
+
+// containsLowerASCII reports whether s contains sub (lowercase), ignoring
+// ASCII case.
+func containsLowerASCII(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if equalLowerASCII(s[i:i+len(sub)], sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// headerValue returns the bounds of the header value starting at k: up to
+// the end of the line ("\r", "\n" or len(s)), or, when it opens with "[",
+// from after the bracket to the next "]" on the line.
+func headerValue(s string, k int) (start, end int) {
+	end = len(s)
+	if e := strings.IndexAny(s[k:], "\r\n"); e >= 0 {
+		end = k + e
+	}
+	if k < end && s[k] == '[' {
+		if e := strings.IndexByte(s[k:end], ']'); e >= 0 {
+			end = k + e
+		}
+		return k + 1, end
+	}
+	return k, end
+}
+
 // valueAfterKey returns the span of the value following the separator s[p]
 // (":" or "=") when the key before it, optionally quoted (possibly with
 // escaped quotes) and followed by spaces, is sensitive. An unquoted value
 // that is an authorization scheme yields an empty span right before it, so
-// the caller rescans it as a scheme.
-func valueAfterKey(s string, p int) (vs, ve int, ok bool) {
+// the caller rescans it as a scheme. Header lines (see maskKeyValues): on an
+// authorization line the span covers the value after its Bearer or Basic
+// scheme, or the whole value; on a cookie line rest is the end of the
+// header value, past the first value's end ve, for maskCookieRest (rest is 0
+// otherwise).
+func valueAfterKey(s string, p int) (vs, ve, rest int, ok bool) {
 	ke := p
 	for ke > 0 && (s[ke-1] == ' ' || s[ke-1] == '\t') {
 		ke--
 	}
+	quotedKey := false
 	if ke > 0 && (s[ke-1] == '"' || s[ke-1] == '\'') {
+		quotedKey = true
 		ke--
 		for ke > 0 && s[ke-1] == '\\' {
 			ke--
@@ -265,7 +339,7 @@ func valueAfterKey(s string, p int) (vs, ve int, ok bool) {
 		ks--
 	}
 	if ks == ke || !defaultFragments.match(s[ks:ke]) {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
 	k := skipSpaces(s, p+1)
 	// Optional opening quote of the value, possibly escaped.
@@ -275,16 +349,110 @@ func valueAfterKey(s string, p int) (vs, ve int, ok bool) {
 	}
 	if q < len(s) && (s[q] == '"' || s[q] == '\'') {
 		start := q + 1
-		return start, quotedEnd(s, start, s[q], q-k), true
+		return start, quotedEnd(s, start, s[q], q-k), 0, true
+	}
+	hdr := headerNone
+	if !quotedKey && !preMasked(s, k) {
+		hdr = keyHeaderKind(s[ks:ke], s[p])
+	}
+	switch hdr {
+	case headerAuthorization:
+		vs, ve = authorizationValue(s, k)
+		return vs, ve, 0, true
+	case headerCookie:
+		start, end := headerValue(s, k)
+		if start > k { // bracketed: every pair is masked by maskCookieRest
+			return start, start, end, true
+		}
+		ve = unquotedEnd(s, k)
+		return k, ve, end, true
+	case headerNone:
 	}
 	if k >= len(s) || isValueEnd(s[k]) {
-		return k, k, true
+		return k, k, 0, true
 	}
 	end := unquotedEnd(s, k)
 	if isAuthScheme(s[k:end]) {
-		return k, k, true // rescanned as a scheme
+		return k, k, 0, true // rescanned as a scheme
 	}
-	return k, end, true
+	return k, end, 0, true
+}
+
+// preMasked reports whether the value at k is already Mask alone, followed
+// by a space, a "]", a line break or the end of s: the handler renders a
+// sensitive map entry as "Authorization:***" among the other entries of
+// "map[…]" on one line, which the header-line rules would swallow.
+func preMasked(s string, k int) bool {
+	if !strings.HasPrefix(s[k:], Mask) {
+		return false
+	}
+	e := k + len(Mask)
+	return e == len(s) || s[e] == ' ' || s[e] == ']' || s[e] == '\r' || s[e] == '\n'
+}
+
+// authorizationValue returns the span to mask in the authorization header
+// value starting at k (see headerValue): what follows a Bearer or Basic
+// scheme and its spaces, or the whole value. A scheme with nothing after it
+// yields an empty span.
+func authorizationValue(s string, k int) (vs, ve int) {
+	start, end := headerValue(s, k)
+	j := start
+	for j < end && isKeyByte(s[j]) {
+		j++
+	}
+	if isAuthScheme(s[start:j]) && (j == end || s[j] == ' ' || s[j] == '\t') {
+		c := skipSpaces(s, j)
+		if c >= end {
+			return end, end
+		}
+		return c, end
+	}
+	return start, end
+}
+
+// maskCookieRest masks s[from:end], the rest of a cookie header value after
+// its first value: segments are separated by ";", and a segment's value
+// (after "=") or the whole bare segment is masked unless its name is a
+// Set-Cookie attribute. s[:done] is already in b; it returns the new done.
+func maskCookieRest(b *strings.Builder, s string, done, from, end int) int {
+	for seg := from; seg < end; {
+		segEnd := end
+		if e := strings.IndexByte(s[seg:end], ';'); e >= 0 {
+			segEnd = seg + e
+		}
+		ns := seg
+		for ns < segEnd && (s[ns] == ' ' || s[ns] == '\t' || s[ns] == ',') {
+			ns++
+		}
+		name, vs := s[ns:segEnd], ns
+		if eq := strings.IndexByte(name, '='); eq >= 0 {
+			name = name[:eq]
+			vs = skipSpaces(s, ns+eq+1)
+		}
+		name = strings.TrimRight(name, " \t")
+		ve := segEnd
+		for ve > vs && (s[ve-1] == ' ' || s[ve-1] == '\t') {
+			ve--
+		}
+		if ve > vs && !isCookieAttr(name) && s[vs:ve] != Mask {
+			b.WriteString(s[done:vs])
+			b.WriteString(Mask)
+			done = ve
+		}
+		seg = segEnd + 1
+	}
+	return done
+}
+
+// isCookieAttr reports whether name is a Set-Cookie attribute (RFC 6265bis
+// and common extensions), whose value is not a credential.
+func isCookieAttr(name string) bool {
+	for _, a := range [...]string{"path", "domain", "expires", "max-age", "samesite", "priority", "secure", "httponly", "partitioned"} {
+		if equalLowerASCII(name, a) {
+			return true
+		}
+	}
+	return false
 }
 
 // unquotedEnd returns the end of the unquoted value starting at k.
