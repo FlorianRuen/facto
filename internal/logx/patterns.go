@@ -13,6 +13,12 @@ var (
 	// digits, "+", "." or "-") followed by "://", up to whitespace or a
 	// quoting character.
 	urlRe = regexp.MustCompile(`(?i)[a-z][a-z0-9+.-]*://[^\s"'<>` + "`" + `]+`)
+	// userinfoRe matches a scheme and everything up to the last "@" before the
+	// end of the authority ("/", "?", "#" or a line break). Unlike urlRe it does
+	// not stop at spaces or quotes: url.Parse quotes the raw URL in its error
+	// precisely when the userinfo holds such characters. It may over-mask text
+	// between a scheme and a later "@", which is the safe direction.
+	userinfoRe = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)[^/?#\r\n]*@`)
 )
 
 // minTokenRun is the number of consecutive alphanumerics that make a run of
@@ -25,6 +31,7 @@ const minTokenRun = 16
 func Clean(s string) string {
 	s = jwtRe.ReplaceAllLiteralString(s, Mask)
 	s = maskBase64(s)
+	s = userinfoRe.ReplaceAllString(s, "$1")
 	return urlRe.ReplaceAllStringFunc(s, cleanURL)
 }
 
