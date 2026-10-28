@@ -9,8 +9,9 @@
 // only. Items are fetched by UUID (`bw get item <uuid>`, `bw get totp
 // <uuid>`), never by name, never through `bw list` or `bw serve`. The session
 // key travels only in the BW_SESSION variable of each subprocess, never on
-// argv. On Close and on any fatal error the provider runs `bw lock` and wipes
-// the session key.
+// argv. On Close and on any fatal error the provider runs `bw lock` (also
+// after a rejected `bw unlock`, which may have unlocked the CLI) and wipes the
+// session key.
 //
 // The provider never runs a process itself: it talks to a Runner. ExecRunner
 // is the real one; tests use a fake.
@@ -73,7 +74,8 @@ type Command struct {
 }
 
 // Runner runs a bw command and waits for it. It returns a non-nil error when
-// the command fails to start, exits non-zero, or a writer fails.
+// the command fails to start, exits non-zero, or a writer fails. The error must
+// never contain the command's stdout or stderr, which can echo secrets.
 type Runner interface {
 	Run(ctx context.Context, cmd Command) error
 }
@@ -101,8 +103,11 @@ type Provider struct {
 	mu      sync.Mutex
 	session secret.Secret
 	ready   bool // bw status reported unlocked, or bw unlock succeeded
-	failed  bool // a fatal error locked the vault for the rest of the run
-	closed  bool
+	// unlocking is set just before bw unlock runs: the CLI may have unlocked
+	// its local state even when the provider rejects the result.
+	unlocking bool
+	failed    bool // a fatal error locked the vault for the rest of the run
+	closed    bool
 }
 
 // New returns a provider. It fails when opts.Runner is nil.
@@ -161,7 +166,8 @@ func (p *Provider) Resolve(ctx context.Context, ref secret.Ref) (secret.Secret, 
 	return s, nil
 }
 
-// Close runs bw lock when a session key is held, then wipes it. It is
+// Close runs bw lock when a session key is held or bw unlock was run, then
+// wipes the key. It waits for an in-flight Resolve to return. It is
 // idempotent; later Resolve calls fail with secret.ErrClosed.
 func (p *Provider) Close() error {
 	p.mu.Lock()
@@ -234,6 +240,7 @@ func (p *Provider) unlock(ctx context.Context) error {
 	if pw.IsZero() {
 		return errors.New("bitwarden: empty master password")
 	}
+	p.unlocking = true
 	out, err := p.run(ctx, map[string]secret.Secret{unlockEnv: pw}, "unlock", "--raw", "--passwordenv", unlockEnv)
 	pw.Wipe()
 	if err != nil {
@@ -309,16 +316,23 @@ func (p *Provider) fail(ctx context.Context, cause error) error {
 	return errors.Join(cause, p.lock(ctx))
 }
 
-// lock runs bw lock when a session key is held, even when ctx is canceled,
-// then wipes the key.
+// lock runs bw lock when a session key is held or bw unlock was run (its
+// result may have been rejected after the CLI unlocked its local state), even
+// when ctx is canceled, then wipes the key. Without a session key, bw lock
+// runs without BW_SESSION: it needs none.
 func (p *Provider) lock(ctx context.Context) error {
 	p.ready = false
-	if p.session.IsZero() {
+	if p.session.IsZero() && !p.unlocking {
 		return nil
+	}
+	p.unlocking = false
+	var env map[string]secret.Secret
+	if !p.session.IsZero() {
+		env = map[string]secret.Secret{sessionEnv: p.session}
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), lockTimeout)
 	defer cancel()
-	out, err := p.run(ctx, map[string]secret.Secret{sessionEnv: p.session}, "lock")
+	out, err := p.run(ctx, env, "lock")
 	out.wipe()
 	p.session.Wipe()
 	return err

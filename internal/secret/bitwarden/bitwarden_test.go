@@ -649,6 +649,84 @@ func TestBitwarden_LocksOnCloseAndError(t *testing.T) {
 			}
 		})
 	}
+
+	// bw unlock succeeded inside the CLI (its local vault state is unlocked)
+	// but the provider rejects the result: no session key is held, yet the
+	// vault must still be locked (spec "Bitwarden unlock" step 4).
+	unlockCases := []struct {
+		name string
+		out  func(cancel context.CancelFunc, stdout io.Writer) error
+	}{
+		{name: "malformed session key printed", out: func(_ context.CancelFunc, stdout io.Writer) error {
+			return write(stdout, "Your vault is now unlocked!\n")
+		}},
+		{name: "output flood past MaxOutput", out: func(_ context.CancelFunc, stdout io.Writer) error {
+			return flood(stdout, 2*bitwarden.MaxOutput)
+		}},
+		{name: "context canceled during unlock", out: func(cancel context.CancelFunc, _ io.Writer) error {
+			cancel()
+			return context.Canceled
+		}},
+	}
+	for _, tc := range unlockCases {
+		t.Run("rejected unlock: "+tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			f := vault(t)
+			pr := &prompter{pw: secret.FromString("synthetic-master")}
+			p := newProvider(t, bitwarden.Options{Runner: f, Password: pr.get})
+			f.setHook(func(_ context.Context, c *call, stdout, _ io.Writer) (bool, error) {
+				if len(c.pos) == 0 || c.pos[0] != "unlock" {
+					return false, nil
+				}
+				f.mu.Lock()
+				f.current = f.unlockKey // the CLI unlocked its local state
+				f.mu.Unlock()
+				return true, tc.out(cancel, stdout)
+			})
+
+			s, err := p.Resolve(ctx, bwRef("password"))
+			if err == nil {
+				t.Fatal("Resolve: nil error")
+			}
+			if !s.IsZero() {
+				t.Error("non-empty Secret returned with an error")
+			}
+			locks := f.named("lock")
+			if len(locks) != 1 {
+				t.Fatalf("bw lock ran %d times after a rejected unlock, want 1", len(locks))
+			}
+			if locks[0].ctxErr != nil {
+				t.Errorf("bw lock started with a done context (%v): it must run even when the caller's context is canceled", locks[0].ctxErr)
+			}
+			if v := locks[0].envVals[sessionEnv]; v != "" {
+				t.Errorf("bw lock ran with session %q, want none (no session key accepted)", v)
+			}
+			f.mu.Lock()
+			current := f.current
+			f.mu.Unlock()
+			if current != "" {
+				t.Error("CLI vault state still unlocked after a rejected unlock")
+			}
+			if n := len(f.named("get")); n != 0 {
+				t.Errorf("bw get ran %d times after a rejected unlock, want 0", n)
+			}
+			// Locked for the rest of the run: no new prompt, no new lock.
+			if _, err := p.Resolve(t.Context(), bwRef("username")); err == nil {
+				t.Error("Resolve after a rejected unlock succeeded, want an error")
+			}
+			if err := p.Close(); err != nil {
+				t.Errorf("Close: %v", err)
+			}
+			if pr.count() != 1 {
+				t.Errorf("master password prompted %d times, want 1", pr.count())
+			}
+			if n := len(f.named("lock")); n != 1 {
+				t.Errorf("bw lock ran %d times in total, want 1", n)
+			}
+		})
+	}
 }
 
 // onGet builds a hook that replaces every `bw get` with fn.
