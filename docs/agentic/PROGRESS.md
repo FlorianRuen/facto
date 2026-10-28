@@ -63,3 +63,7 @@ Format: `YYYY-MM-DD <milestone> <task> <done|BLOCKED(Hn)|NEEDS(Hn)>: <one line> 
 2026-10-28 J0 T13 done: internal/config strict YAML load + validation, 2 contradictory test values fixed (assertions unchanged), make verify exit 0 on clean worktree (commit 70f3813); review pending
 2026-10-28 J0 T18 done: keyring provider over go-keyring (ADR 0005), coverage 96.8% (commit 2c6555c)
 2026-10-28 J0 T19 done: Bitwarden provider (status/unlock --passwordenv/get/lock, fake + re-exec runner, never runs bw), coverage 96.6%, make verify exit 0 on clean worktree (commit 7f88ae7); #nosec G204 cites J0-T19 pending a GitHub issue; review pending
+2026-10-28 J0 T13 review: 1 blocking (no-echo anchor/tag branches untested) fixed in a93b95f, mutants killed; non-blocking: key-name echo, merge keys/aliases accepted, docs/security.md config section for docs-writer
+2026-10-28 J0 T26 done: internal/proc Harden (RLIMIT_CORE 0/0, PR_SET_DUMPABLE 0), coverage 88.9% incl. re-exec child (2ef2a08); wiring into run comes with T25
+2026-10-28 J0 T18/T19 review: 3 blocking — rejected-unlock lock gap fixed test-first (f1bb60d, bitwarden 97.6%); security docs added (93f4329); #nosec G204 issue number BLOCKED(H1): needs a GitHub issue opened (approval pending)
+2026-10-28 J0 T25 done: cmd/facto cobra CLI (collect --year/--config/--non-interactive, version), wires config/store/dest-local/inbox/orchestrator/report/logx, run hardens via proc.Harden; coverage 90.4%; cobra v1.10.2 added (ADR 0002, pflag v1.0.10 via pdfcpu)
