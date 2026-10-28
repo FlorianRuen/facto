@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
-	"strings"
 	"sync"
+
+	"github.com/FlorianRuen/facto/internal/httpx"
 )
 
 // maxIDLen caps Info.ID: it ends up in file names.
@@ -67,20 +68,15 @@ func (r *Registry) All() []Connector {
 }
 
 // ValidateInfo checks a connector's metadata; failures wrap ErrInvalidInfo.
-// ID: ^[a-z0-9]+(-[a-z0-9]+)*$ and at most 40 bytes. AllowedDomains: at least
-// one; each a bare host or "*." followed by a host, without scheme, path,
-// port, whitespace or other wildcard. Kinds: every entry valid.
+// ID: ^[a-z0-9]+(-[a-z0-9]+)*$ and at most 40 bytes. AllowedDomains: the
+// syntax of httpx.ParseAllowlist (single source of truth: what registers is
+// exactly what httpx can enforce). Kinds: every entry valid.
 func ValidateInfo(info Info) error {
 	if len(info.ID) > maxIDLen || !idRe.MatchString(info.ID) {
 		return fmt.Errorf("%w: id %q", ErrInvalidInfo, info.ID)
 	}
-	if len(info.AllowedDomains) == 0 {
-		return fmt.Errorf("%w: %s: no allowed domain", ErrInvalidInfo, info.ID)
-	}
-	for _, d := range info.AllowedDomains {
-		if !validDomain(d) {
-			return fmt.Errorf("%w: %s: allowed domain %q", ErrInvalidInfo, info.ID, d)
-		}
+	if _, err := httpx.ParseAllowlist(info.AllowedDomains); err != nil {
+		return fmt.Errorf("%w: %s: allowed domains: %w", ErrInvalidInfo, info.ID, err)
 	}
 	for _, k := range info.Kinds {
 		if !k.valid() {
@@ -88,12 +84,4 @@ func ValidateInfo(info Info) error {
 		}
 	}
 	return nil
-}
-
-func validDomain(d string) bool {
-	host := strings.TrimPrefix(d, "*.")
-	if host == "" || strings.ContainsAny(host, "*/:@?#\\ \t\r\n\x00") {
-		return false
-	}
-	return !strings.HasPrefix(host, ".") && !strings.HasSuffix(host, ".") && !strings.Contains(host, "..")
 }
