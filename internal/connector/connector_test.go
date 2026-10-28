@@ -46,8 +46,8 @@
 //	    Log     *slog.Logger
 //	}
 //	// Consumer-side interfaces. Method sets are not pinned by these tests:
-//	// SecretResolver is meant to be Resolve(ctx, ref string) (secrets.Secret, error)
-//	// once internal/secrets lands (T10); Prompter asks the user for an OTP code;
+//	// SecretResolver is meant to be Resolve(ctx, ref string) (secret.Secret, error)
+//	// once internal/secret lands (T10); Prompter asks the user for an OTP code;
 //	// BrowserPool is a placeholder until internal/browser exists.
 //	type SecretResolver interface{ … }
 //	type Prompter interface{ … }

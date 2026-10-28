@@ -30,7 +30,7 @@ packages that the first command will use:
 
 Still pending in J0:
 
-- `internal/secrets` (the `Secret` type, `bw://` and `keyring://` references).
+- `internal/secret` (the `Secret` type, `bw://` and `keyring://` references).
 - `config.yaml` loading and validation.
 - The CLI: `facto collect` and `facto version`.
 - The end-to-end test harness and the `inbox` scenario.

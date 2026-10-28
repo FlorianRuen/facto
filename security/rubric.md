@@ -2,7 +2,7 @@
 
 | # | Category | Max | Controls the auditor must find evidence for |
 |---|---|---|---|
-| 1 | Secret handling | 15 | References only in config; `secrets.Secret` everywhere; Bitwarden by UUID, `--passwordenv` in subprocess env only, `bw lock` deferred, no `bw serve`; no secret in argv/env/URL/errors |
+| 1 | Secret handling | 15 | References only in config; `secret.Secret` everywhere; Bitwarden by UUID, `--passwordenv` in subprocess env only, `bw lock` deferred, no `bw serve`; no secret in argv/env/URL/errors |
 | 2 | Session storage | 10 | AEAD with key from keyring/password manager; 0600; ephemeral mode works; rotation on login |
 | 3 | Browser isolation | 15 | Pipe transport or 127.0.0.1 random port; disposable 0700 profile removed on success and error; hardened flags; pinned, checksum-verified Chrome for Testing; browser lifetime limited to login |
 | 4 | Logging and redaction | 10 | Redacting handler on every logger; no bodies; key and pattern masking; canary coverage of every artifact type |

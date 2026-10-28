@@ -24,7 +24,7 @@ websites themselves.
 | Reading persisted sessions | AEAD-encrypted sessions, key in keyring or password manager; `sessions: ephemeral` | Not started (J1, `internal/vault`) |
 | Leak through sync | Refuse a state dir inside the output folder or a synced folder | Decided (ADR 0007, D1); check pending with config loading |
 | Leak in logs, reports, errors | `Secret` type, redaction by key and pattern, no HTTP bodies logged | Redacting logger and clean reports done; `Secret` type pending |
-| Leak through the command line | No secret in argv; subprocess-only environment | Pending (`internal/secrets`, CLI) |
+| Leak through the command line | No secret in argv; subprocess-only environment | Pending (`internal/secret`, CLI) |
 | Leak through a memory dump | `RLIMIT_CORE=0`, `PR_SET_DUMPABLE=0` on Linux | Pending (`internal/proc`) |
 | Leak through a bug report | Redaction, CI canary scan, clean `--report` | Canary scan (`make leakcheck`) and clean report done |
 | Exfiltration by a connector | Per-connector domain allowlist in the HTTP client | Done in `internal/httpx` and `internal/orchestrator` |

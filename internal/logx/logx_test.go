@@ -3,10 +3,10 @@
 // memory and in output" and "Threat model" (leak in logs, reports, errors).
 //
 // Import rule: logx imports only the standard library. It must NOT import
-// internal/secrets (secrets.Secret implements slog.LogValuer and is masked
+// internal/secret (secret.Secret implements slog.LogValuer and is masked
 // because the handler resolves LogValuers before anything else), so
 // secrets' tests may use logx without an import cycle. These tests use a
-// local LogValuer type instead of secrets.Secret.
+// local LogValuer type instead of secret.Secret.
 //
 // Expected API (implementer: follow exactly):
 //
@@ -355,7 +355,7 @@ func TestHandler_MasksTokenPatterns(t *testing.T) {
 }
 
 // leakyError prints its value through String and Error but masks it
-// through LogValue, like secrets.Secret must.
+// through LogValue, like secret.Secret must.
 type leakyError struct{ v string }
 
 func (l leakyError) String() string     { return l.v }

@@ -12,8 +12,8 @@ Credential Manager and Linux Secret Service without CGO.
 
 ## Decision
 `github.com/zalando/go-keyring` **v0.2.8** (2026-03-23), wrapped by
-`internal/secrets` behind a small interface (`Get(service, user) (string, error)`); the
-returned string is converted to `secrets.Secret` immediately. Tests use a fake, never the
+`internal/secret` behind a small interface (`Get(service, user) (string, error)`); the
+returned string is converted to `secret.Secret` immediately. Tests use a fake, never the
 real keyring (T18). `ErrNotFound` maps to `secrets.ErrSecretNotFound`.
 
 Backends (read in v0.2.8 sources):

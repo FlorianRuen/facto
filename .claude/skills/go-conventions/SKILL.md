@@ -18,7 +18,7 @@ description: facto's Go coding conventions (package layout, errors, context, log
 - No `panic` outside `main`. Recover at the orchestrator boundary per connector, log a redacted message, mark the connector `broken`.
 
 ## Security-shaped APIs (mandatory)
-- Secrets: `secrets.Secret` only. Never convert to `string` except at the last call site (`input.Type(sec.Expose())`), never store the exposed value.
+- Secrets: `secret.Secret` only. Never convert to `string` except at the last call site (`input.Type(sec.Expose())`), never store the exposed value.
 - Network: `httpx.Client(info.AllowedDomains)` only. `net/http` default client is forbidden (lint rule `forbidigo`).
 - Files: `fsx.WriteAtomic`, `fsx.MkdirPrivate`, `fsx.SafeName`. `os.WriteFile`/`os.Create` are forbidden outside `internal/fsx`.
 - Logging: `slog` from `Env.Log` (redacting handler). `fmt.Print*`, `log.*` forbidden outside `cmd/`. Never log request or response bodies.

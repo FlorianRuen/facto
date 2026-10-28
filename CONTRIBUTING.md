@@ -43,7 +43,7 @@ If a target is missing, add it to the Makefile.
 | `make tools` | Installs the pinned tools listed above |
 
 Coverage gates: every package needs 70%. `internal/normalize`, `internal/store`,
-`internal/secrets`, `internal/vault`, `internal/fsx` and `internal/httpx` need 85%.
+`internal/secret`, `internal/vault`, `internal/fsx` and `internal/httpx` need 85%.
 
 The end-to-end harness (`test/`) is not in the repository yet, so `make e2e` fails
 today.

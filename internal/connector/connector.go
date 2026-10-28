@@ -102,7 +102,7 @@ type Env struct {
 }
 
 // SecretResolver resolves secret references for a connector. Placeholder: it
-// gains Resolve(ctx, ref string) (secrets.Secret, error) when internal/secrets
+// gains Resolve(ctx, ref string) (secret.Secret, error) when internal/secret
 // lands (J0 T10).
 type SecretResolver any
 

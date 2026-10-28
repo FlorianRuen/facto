@@ -18,4 +18,4 @@ description: How to write facto tests that actually protect behaviour (table tes
 - **Security negatives**: every guard (allowlist, permissions, SafeName, size caps,
   XML entities) has a test proving it rejects bad input.
 - Coverage gates (`make cover`): 85% for `internal/normalize`, `internal/store`,
-  `internal/secrets`, `internal/vault`, `internal/fsx`, `internal/httpx`; 70% elsewhere.
+  `internal/secret`, `internal/vault`, `internal/fsx`, `internal/httpx`; 70% elsewhere.

@@ -5,7 +5,7 @@ it headless: `claude -p "/goal <condition>"`. Each condition is provable from pr
 command output, because the goal evaluator only reads the transcript.
 
 ## J0 — Foundations (needs H1)
-/goal `make verify` exits 0 on a clean checkout, `make cover` prints >= 85% for internal/normalize, internal/store, internal/secrets, internal/fsx and internal/httpx, `make e2e` passes the `inbox` scenario, `make leakcheck` prints "0 canary hits", `actionlint` reports no error on .github/workflows, and docs/agentic/PROGRESS.md marks J0 done, or stop after 100 turns
+/goal `make verify` exits 0 on a clean checkout, `make cover` prints >= 85% for internal/normalize, internal/store, internal/secret, internal/fsx and internal/httpx, `make e2e` passes the `inbox` scenario, `make leakcheck` prints "0 canary hits", `actionlint` reports no error on .github/workflows, and docs/agentic/PROGRESS.md marks J0 done, or stop after 100 turns
 
 ## J1 — Browser layer and fake provider
 /goal `make e2e` passes every fakeprovider scenario (password, totp, email-otp, sso-redirect, expired-session, rate-limit, site-changed, captcha), the browser security scenarios print "no listening CDP port" and "profile removed", `make leakcheck` prints "0 canary hits", `make score-check` prints "AUDIT: PASS" with total >= 85 and no category below 6, red-team attack tests all pass, and PROGRESS.md marks J1 done, or stop after 150 turns

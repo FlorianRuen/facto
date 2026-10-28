@@ -28,7 +28,7 @@ Never invent other ways to build or test. If a target is missing, add it to the 
 - `internal/httpx` is the ONLY way to do network I/O. It enforces the connector's
   domain allowlist.
 - `internal/fsx` is the ONLY way to write files: 0600/0700, atomic writes, path sanitizing.
-- `internal/secrets` resolves `bw://`, `keyring://`… references. Values are `secrets.Secret`.
+- `internal/secret` resolves `bw://`, `keyring://`… references. Values are `secret.Secret`.
 - `internal/vault` encrypts sessions (AEAD). `internal/store` is the SQLite index.
 - `internal/normalize` naming, dedup, Factur-X. `internal/dest/{local,gdrive}` destinations.
 - `connectors/<id>/` one package per supplier + `docs/connectors/<id>.md` sheet.
@@ -43,7 +43,7 @@ Never invent other ways to build or test. If a target is missing, add it to the 
 4. Never disable a hook, a linter rule, a scanner or a CI job. Justify a `//nolint` or
    `#nosec` inline with a reason and an issue number.
 5. No network call outside `internal/httpx`, no file write outside `internal/fsx`,
-   no secret outside `secrets.Secret`, no logging outside the redacting `slog` handler.
+   no secret outside `secret.Secret`, no logging outside the redacting `slog` handler.
 6. No new dependency without an ADR in `docs/adr/` (why, alternatives, license, maintenance).
 7. Fixtures in `testdata/` must be synthetic or sanitized; run the `fixtures-from-har` skill.
 

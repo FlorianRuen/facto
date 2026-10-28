@@ -14,11 +14,11 @@
 // TLS configurations, keys), whose String or Error is never called, even
 // when promoted to a struct that embeds it. It renders errors and arbitrary
 // values to cleaned, length-capped strings, and resolves slog.LogValuer
-// first so types such as secrets.Secret mask themselves. See docs/spec.md
+// first so types such as secret.Secret mask themselves. See docs/spec.md
 // "Data in memory and in output".
 //
 // logx imports only the standard library so that every other package,
-// internal/secrets included, can use it without an import cycle.
+// internal/secret included, can use it without an import cycle.
 package logx
 
 import (
