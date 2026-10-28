@@ -1,0 +1,4 @@
+.cache/
+dist/
+*.har.raw
+.facto/
