@@ -57,3 +57,9 @@ Format: `YYYY-MM-DD <milestone> <task> <done|BLOCKED(Hn)|NEEDS(Hn)>: <one line> 
 2026-10-28 J0 docs done: docs/security.md describes httpx opaque-URL refusal, ProviderID policy (structural checks + JWT refusal, reports clean the id), logx key/group-name cleaning, free-text key=value/Bearer/Basic/header-line masking, and the residuals (multi-word unquoted values, split keys, XML/=>/spaced keys, @ / # parse-error edge) and known over-masking
 2026-10-28 J0 logx timing tests run sequentially (no budget change) to stop load-induced flakes; make verify passed twice under load 5-6 (commit 03e4a37)
 2026-10-28 J0 review PASS for bf2d872, 3c24022, 3cca248, 03e4a37 (supplier ids accepted, header lines masked, docs); residual cookie/id gaps documented in docs/security.md
+2026-10-28 J0 T10 unblocked: Claude Code refuses any access under a folder named internal/secrets; Florian chose to rename the package to internal/secret (commit a476bf3); T10/T18/T19 tests moved there, T10 implementation in progress
+2026-10-28 J0 T10 done: internal/secret Secret/ParseRef/Resolver, coverage 99.1%, make verify exit 0 on clean worktree (commit 567366a); review pending
+2026-10-28 J0 T10 review: 1 blocking (ResolveRef skipped ParseRef checks on hand-built Refs) fixed test-first in c46d447; ctx re-check + provider doc added; coverage 97.7%
+2026-10-28 J0 T13 done: internal/config strict YAML load + validation, 2 contradictory test values fixed (assertions unchanged), make verify exit 0 on clean worktree (commit 70f3813); review pending
+2026-10-28 J0 T18 done: keyring provider over go-keyring (ADR 0005), coverage 96.8% (commit 2c6555c)
+2026-10-28 J0 T19 done: Bitwarden provider (status/unlock --passwordenv/get/lock, fake + re-exec runner, never runs bw), coverage 96.6%, make verify exit 0 on clean worktree (commit 7f88ae7); #nosec G204 cites J0-T19 pending a GitHub issue; review pending

@@ -112,6 +112,10 @@ func TestLoad_ErrorsNeverEchoValues(t *testing.T) {
 		{"string into mapping", "output: " + v + "\n"},
 		{"unknown field holding a secret", "connectors:\n  edf:\n    pasword: " + v + "\n"},
 		{"plaintext in secret field", "connectors:\n  edf:\n    password: " + v + "\n"},
+		// A password starting with "*" or "!" parses as an alias or a tag;
+		// yaml quotes the anchor name and prints the tag in its errors.
+		{"alias to unknown anchor", "connectors:\n  edf:\n    password: *" + v + "\n"},
+		{"custom tag on a non-string field", "connectors:\n  edf:\n    enabled: !" + v + " x\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
