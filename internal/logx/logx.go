@@ -2,9 +2,11 @@
 // through (CLAUDE.md rule 5). It masks values by key (cookie, authorization,
 // token, password, session…) at any group depth, masks token patterns (JWT,
 // long base64, URL query strings and userinfo) in messages and string values,
-// renders errors and arbitrary values to cleaned, length-capped strings, and
-// resolves slog.LogValuer first so types such as secrets.Secret mask
-// themselves. See docs/spec.md "Data in memory and in output".
+// walks composite values (maps, structs, slices) to mask sensitive map keys,
+// struct fields and byte values, renders errors and arbitrary values to
+// cleaned, length-capped strings, and resolves slog.LogValuer first so types
+// such as secrets.Secret mask themselves. See docs/spec.md "Data in memory
+// and in output".
 //
 // logx imports only the standard library so that every other package,
 // internal/secrets included, can use it without an import cycle.
@@ -28,12 +30,20 @@ const DefaultMaxErrorLen = 512
 // TruncatedSuffix ends an error string that was cut.
 const TruncatedSuffix = "…[truncated]"
 
-// defaultKeys are the sensitive key fragments, matched against the
-// lowercased attribute key with strings.Contains.
+// defaultKeys are the sensitive key fragments. A fragment of more than
+// shortFragment bytes matches when the lowercased key contains it; a shorter
+// one must equal a whole word of the key (see words), so "auth" masks
+// "X-Auth" and "basicAuth" but not "author".
 var defaultKeys = []string{
 	"cookie", "authorization", "token", "password", "passwd", "passphrase",
 	"secret", "session", "apikey", "api_key", "api-key", "credential",
+	"pwd", "auth", "otp", "totp", "bearer", "jwt", "csrf", "xsrf", "sid",
+	"sessid", "mdp", "motdepasse", "mot_de_passe",
 }
+
+// shortFragment is the length up to which a fragment matches whole words
+// only.
+const shortFragment = 4
 
 // Options configures a Handler.
 type Options struct {
@@ -48,7 +58,8 @@ type Options struct {
 // passing it on. It is immutable and safe for concurrent use.
 type Handler struct {
 	inner  slog.Handler
-	keys   []string // lowercased sensitive fragments
+	keys   []string // lowercased fragments matched with strings.Contains
+	words  []string // lowercased short fragments matched as whole words
 	maxErr int
 	// masked is set once a sensitive WithGroup name was opened: every
 	// attribute logged inside it is masked.
@@ -57,18 +68,21 @@ type Handler struct {
 
 // NewHandler returns a Handler redacting records before inner sees them.
 func NewHandler(inner slog.Handler, opts Options) *Handler {
-	keys := slices.Clone(defaultKeys)
-	for _, k := range opts.Keys {
-		// An empty fragment would match every key.
-		if k = strings.ToLower(k); k != "" {
-			keys = append(keys, k)
+	h := &Handler{inner: inner, maxErr: opts.MaxErrorLen}
+	if h.maxErr <= 0 {
+		h.maxErr = DefaultMaxErrorLen
+	}
+	for _, k := range slices.Concat(defaultKeys, opts.Keys) {
+		switch k = strings.ToLower(k); {
+		case k == "":
+			// An empty fragment would match every key.
+		case len(k) <= shortFragment && isWord(k):
+			h.words = append(h.words, k)
+		default:
+			h.keys = append(h.keys, k)
 		}
 	}
-	maxErr := opts.MaxErrorLen
-	if maxErr <= 0 {
-		maxErr = DefaultMaxErrorLen
-	}
-	return &Handler{inner: inner, keys: keys, maxErr: maxErr}
+	return h
 }
 
 // Enabled delegates to the inner handler.
@@ -113,7 +127,8 @@ func (h *Handler) WithGroup(name string) slog.Handler {
 	return &c
 }
 
-// sensitive reports whether key, lowercased, contains a sensitive fragment.
+// sensitive reports whether key, lowercased, contains a long sensitive
+// fragment or has a short one as a whole word.
 func (h *Handler) sensitive(key string) bool {
 	k := strings.ToLower(key)
 	for _, f := range h.keys {
@@ -121,7 +136,45 @@ func (h *Handler) sensitive(key string) bool {
 			return true
 		}
 	}
+	if len(h.words) == 0 {
+		return false
+	}
+	for _, w := range words(key) {
+		if slices.Contains(h.words, w) {
+			return true
+		}
+	}
 	return false
+}
+
+// isWord reports whether s is made of ASCII letters and digits only.
+func isWord(s string) bool {
+	for i := range len(s) {
+		if !isAlnum(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// words splits key into lowercased words on non-alphanumeric bytes and on
+// lower→Upper camelCase boundaries: "X-Auth_header" → x, auth, header;
+// "basicAuth" → basic, auth; "PHPSESSID" → phpsessid.
+func words(key string) []string {
+	var out []string
+	start := -1
+	for i := 0; i <= len(key); i++ {
+		boundary := i == len(key) || !isAlnum(key[i])
+		camel := !boundary && i > 0 && 'A' <= key[i] && key[i] <= 'Z' && 'a' <= key[i-1] && key[i-1] <= 'z'
+		if (boundary || camel) && start >= 0 {
+			out = append(out, strings.ToLower(key[start:i]))
+			start = -1
+		}
+		if !boundary && start < 0 {
+			start = i
+		}
+	}
+	return out
 }
 
 // redact returns a copy of a that is safe to hand to the inner handler.
@@ -148,7 +201,7 @@ func (h *Handler) redact(a slog.Attr, masked bool) slog.Attr {
 	}
 	switch v.Kind() {
 	case slog.KindString:
-		return slog.String(a.Key, Clean(v.String()))
+		return slog.String(a.Key, h.capStr(Clean(v.String()), false))
 	case slog.KindAny:
 		return slog.String(a.Key, h.render(v.Any()))
 	case slog.KindBool, slog.KindDuration, slog.KindFloat64, slog.KindInt64,
@@ -162,31 +215,26 @@ func (h *Handler) redact(a slog.Attr, masked bool) slog.Attr {
 	return slog.String(a.Key, Mask) // a future Kind: fail closed
 }
 
-// render turns an arbitrary value into a cleaned string, so the inner
-// handler never dumps a raw struct, map or slice. Errors are also stripped
-// of control characters and capped.
-func (h *Handler) render(x any) string {
-	switch t := x.(type) {
-	case error:
-		return h.cleanError(t.Error())
-	case fmt.Stringer:
-		return Clean(t.String())
-	default:
-		return Clean(fmt.Sprintf("%+v", x))
-	}
-}
-
-// cleanError applies Clean, replaces control characters by a space and cuts
-// the result to maxErr bytes on a rune boundary. Cleaning happens before
-// cutting so a token straddling the cap is still recognised.
-func (h *Handler) cleanError(s string) string {
-	s = strings.Map(func(r rune) rune {
+// controlFree replaces control characters (U+0000–U+001F, U+007F) by a
+// space, so an error cannot forge log lines.
+func controlFree(s string) string {
+	return strings.Map(func(r rune) rune {
 		if r < 0x20 || r == 0x7f {
 			return ' '
 		}
 		return r
-	}, Clean(s))
+	}, s)
+}
+
+// capStr cuts s to maxErr bytes on a rune boundary and appends
+// TruncatedSuffix when it was longer, or when force reports that content was
+// already dropped. Callers clean s first so a token straddling the cap is
+// still recognised.
+func (h *Handler) capStr(s string, force bool) string {
 	if len(s) <= h.maxErr {
+		if force {
+			return s + TruncatedSuffix
+		}
 		return s
 	}
 	cut := h.maxErr
