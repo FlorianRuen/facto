@@ -13,14 +13,38 @@ XML itself is done with the stdlib (T16).
 
 ## Decision
 `github.com/pdfcpu/pdfcpu` **v0.16.4** (2026-10-27), used only in
-`internal/normalize/facturx` through `api.ExtractAttachmentsRaw(ctx, rs, "", names, conf)`,
-which returns `[]model.Attachment` (an `io.Reader` per file) without writing to disk
-(`outDir` is ignored per its doc comment). Guards on our side:
-- size cap on the input PDF before parsing and on each attachment read (`io.LimitReader`);
-  pdfcpu holds the attachment content in memory;
+`internal/normalize/facturx` (`extract.go`), and only to parse the PDF structure:
+`api.ReadContext(ctx, rs, conf)` (no validation pass), then the catalog,
+dictionaries and streams are read through `model.XRefTable` dereferencing. Nothing is
+written to disk.
+
+Amended during T17 (2026-10-28): `api.ExtractAttachmentsRaw` was the first plan, but it
+inflates each selected attachment completely in memory (`XRefTable.DecodeStream`, up to
+pdfcpu's decode limit, 512 MiB by default) before the caller can apply any cap: a
+Flate bomb in an untrusted `inbox/` PDF would cost hundreds of MiB. It also matches
+selected names against `/Desc`, and relies on a validation pass to populate name
+trees. Instead `Extract`:
+- walks the `EmbeddedFiles` name tree itself (iterative, cycle detection on object
+  numbers, depth <= 32, <= 10 000 entries) and selects on the file specification's own
+  name (`/UF`, else `/F`), never the name-tree key or `/Desc`;
+- takes the embedded file stream's **encoded** bytes (`StreamDict.Raw`, which pdfcpu does
+  not decode while reading when `DecodeAllStreams` is false) and inflates them itself
+  with `compress/zlib` through `io.LimitReader(MaxSize+1)`: at most 4 MiB + 1 byte is
+  ever inflated. Only no filter or a single `FlateDecode` without predictor is accepted
+  (what Factur-X producers write for XML); any other filter or a filter chain is
+  `ErrInvalidPDF`.
+
+Guards on our side:
+- explicit `model.NewStatelessConfiguration()` (a nil configuration makes pdfcpu create
+  `<UserConfigDir>/pdfcpu`, a write outside `fsx`), with `Limits` set to
+  `MaxInputBytes = MaxStreamBytes = MaxDecodeBytes = MaxPDFSize` (32 MiB); no call to
+  any pdfcpu package-level state changer (`ConfigPath`, loggers, `DisableConfigDir`);
+- input read through `io.LimitReader(MaxPDFSize+1)` before any parsing;
+- a 10 s `context.WithTimeout` around parsing (pdfcpu checks the context between
+  objects); a timeout is `ErrInvalidPDF` wrapping `context.DeadlineExceeded`;
 - our own `recover`: pdfcpu's `fault.Catch` only recovers its own `fault.Panic` type and
   re-panics anything else;
-- fuzz test `FuzzExtract` over malformed PDFs.
+- fuzz test `FuzzExtract` over malformed PDFs, `TestExtract_FlateBomb` (16x MaxSize).
 
 Modules compiled in (`go list -deps`, CGO_ENABLED=0, same on all OSes):
 `golang.org/x/crypto` v0.58.0, `golang.org/x/image` v0.47.0, `golang.org/x/text`
@@ -49,3 +73,14 @@ pre-1.0: API changes between minors are expected, hence the single call site.
 - Large dependency for one feature; its blast radius is confined to `facturx`.
 - `ErrNoFacturX` when neither attachment name is present; malformed PDFs are errors,
   never panics.
+- We depend on `XRefTable`/`StreamDict` details (`Raw`, `FilterPipeline`,
+  `Dereference*`) rather than only the `api` surface: a pdfcpu upgrade must re-run the
+  `facturx` tests, which pin the behaviour (including the bomb test).
+- Residual risk: pdfcpu itself still inflates the PDF's *structural* streams (object
+  streams, xref streams) while reading. Each is capped at `MaxDecodeBytes` (32 MiB), but
+  pdfcpu's cumulative budget across streams is at least 1 GiB by design, so a crafted
+  PDF with many object streams can still cost a lot of memory before the 10 s deadline.
+  Accepted for J0 (the input is the user's own `inbox/` or a connector download);
+  revisit if pdfcpu exposes a lower cumulative budget.
+- A producer that uses another filter on the XML attachment (none known) is rejected
+  with `ErrInvalidPDF`; the caller then falls back to the connector's metadata.
