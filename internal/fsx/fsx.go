@@ -313,6 +313,21 @@ func (r *Root) Remove(name string) error {
 	return nil
 }
 
+// Lstat describes name without following a final symlink; intermediate
+// symlinks are followed only while they stay inside the root. A missing name
+// wraps fs.ErrNotExist.
+func (r *Root) Lstat(name string) (fs.FileInfo, error) {
+	osName, err := cleanName(name)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := r.root.Lstat(osName)
+	if err != nil {
+		return nil, fmt.Errorf("fsx lstat %q: %w", name, err)
+	}
+	return fi, nil
+}
+
 // CheckPrivate reports ErrInsecurePerms when path (file or directory, symlinks
 // followed) has any group or world permission bit. A missing path wraps
 // fs.ErrNotExist.
