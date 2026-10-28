@@ -70,17 +70,38 @@ func oneOf(key, v string, allowed ...string) error {
 // validateNaming compiles each template alone with the renderer's own parser,
 // so that an error is attributed to the right key. The language is checked
 // by Validate itself.
+//
+// The normalize error text is dropped: it quotes the template, and a
+// template is a scalar value that may hold a secret pasted on the wrong
+// line. The returned error names the key, wraps ErrInvalid and
+// normalize.ErrBadTemplate, and gives a fixed reason.
 func (c *Config) validateNaming() error {
 	var errs []error
 	if _, err := normalize.NewNamer(normalize.Config{File: c.Naming.File}); err != nil &&
 		errors.Is(err, normalize.ErrBadTemplate) {
-		errs = append(errs, fmt.Errorf("%w: naming.file: %w", ErrInvalid, err))
+		errs = append(errs, badTemplate("naming.file", namingFileGrammar))
 	}
 	if _, err := normalize.NewNamer(normalize.Config{Dir: c.Naming.Dir}); err != nil &&
 		errors.Is(err, normalize.ErrBadTemplate) {
-		errs = append(errs, fmt.Errorf("%w: naming.dir: %w", ErrInvalid, err))
+		errs = append(errs, badTemplate("naming.dir", namingDirGrammar))
 	}
 	return errors.Join(errs...)
+}
+
+// Fixed, value-free descriptions of the template language (see
+// internal/normalize/naming.go parseTemplate).
+const (
+	namingPlaceholders = "placeholders {date}, {date:<layout>}, {year}, {provider}, {category}, {kind}, {amount}, {ref}"
+	namingFileGrammar  = "invalid naming template; allowed: lowercase letters, digits, - and _, " +
+		namingPlaceholders + ", and one level of [optional] groups"
+	namingDirGrammar = "invalid naming template; allowed: lowercase letters, digits, - and _, " +
+		namingPlaceholders + ", one level of [optional] groups, and / between non-empty segments"
+)
+
+// badTemplate reports a naming template that does not compile, without its
+// value.
+func badTemplate(key, reason string) error {
+	return fmt.Errorf("%w: %s: %w: %s", ErrInvalid, key, normalize.ErrBadTemplate, reason)
 }
 
 // validateSlug checks an id or a category used as a path component.
