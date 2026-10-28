@@ -1,0 +1,47 @@
+version: "2"
+run:
+  timeout: 5m
+linters:
+  default: standard
+  enable:
+    - errorlint
+    - wrapcheck
+    - gosec
+    - bodyclose
+    - noctx
+    - contextcheck
+    - forbidigo
+    - depguard
+    - errname
+    - exhaustive
+    - gocritic
+    - revive
+    - unparam
+    - usestdlibvars
+  settings:
+    forbidigo:
+      forbid:
+        - pattern: '^fmt\.Print'
+          msg: "use the injected slog logger (CLAUDE.md rule 5)"
+        - pattern: '^http\.(Get|Post|Head|DefaultClient)$'
+          msg: "use internal/httpx (domain allowlist)"
+        - pattern: '^os\.(WriteFile|Create|OpenFile|MkdirAll)$'
+          msg: "use internal/fsx (permissions, atomic writes, SafeName)"
+        - pattern: '^time\.Now$'
+          msg: "inject clock.Clock"
+    depguard:
+      rules:
+        main:
+          deny:
+            - pkg: "log"
+              desc: "use log/slog through Env.Log"
+            - pkg: "math/rand"
+              desc: "use crypto/rand"
+  exclusions:
+    rules:
+      - path: '^(cmd/|internal/fsx/|internal/httpx/|internal/clock/)'
+        linters: [forbidigo]
+      - path: '_test\.go$'
+        linters: [wrapcheck]
+formatters:
+  enable: [gofumpt, goimports]

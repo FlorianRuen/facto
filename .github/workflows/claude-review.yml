@@ -1,0 +1,30 @@
+# Claude Code reviews every PR with the repository's own subagents and rubric.
+# Check the current inputs of anthropics/claude-code-action in its README at setup
+# (authentication secret name, prompt, claude_args) and pin it to a commit SHA.
+name: claude-review
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            You are reviewing PR #${{ github.event.pull_request.number }} of facto.
+            1. Use the reviewer subagent on `git diff origin/main...HEAD`.
+            2. If the diff touches internal/, connectors/, cmd/ or web/, use the
+               security-auditor subagent in review mode: score only the affected
+               categories, list findings with file:line, do not write files.
+            3. Post one PR comment: REVIEW verdict, blocking items, audit summary
+               table, and the line `AUDIT: PASS` or `AUDIT: FAIL`.
+            Never approve; never push; never run password manager CLIs.
+          claude_args: "--max-turns 30"

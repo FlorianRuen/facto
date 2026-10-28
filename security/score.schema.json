@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "facto security score",
+  "type": "object",
+  "required": ["date", "milestone", "commit", "total", "categories", "findings", "scanners", "verdict"],
+  "properties": {
+    "date": { "type": "string", "format": "date" },
+    "milestone": { "type": "string", "pattern": "^J[0-9]+$" },
+    "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "total": { "type": "number", "minimum": 0, "maximum": 100 },
+    "categories": {
+      "type": "array", "minItems": 10, "maxItems": 10,
+      "items": {
+        "type": "object", "required": ["id", "name", "max", "score"],
+        "properties": {
+          "id": { "type": "integer", "minimum": 1, "maximum": 10 },
+          "name": { "type": "string" },
+          "max": { "type": "number" },
+          "score": { "type": "number", "minimum": 0 }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["id", "category", "severity", "location", "status"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^SEC-J[0-9]+-[0-9]+$" },
+          "category": { "type": "integer" },
+          "severity": { "enum": ["critical", "high", "medium", "low"] },
+          "location": { "type": "string" },
+          "status": { "enum": ["open", "fixed", "accepted"] },
+          "regression_test": { "type": "string" }
+        }
+      }
+    },
+    "scanners": { "type": "object", "additionalProperties": { "type": "string", "enum": ["pass", "fail"] } },
+    "verdict": { "enum": ["PASS", "FAIL"] }
+  }
+}

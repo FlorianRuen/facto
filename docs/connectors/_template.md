@@ -1,0 +1,16 @@
+# <Supplier name>
+- id:
+- Site / customer portal:
+- Login: (form, SSO, OAuth, 2FA: type and frequency)
+- Direct POST login possible: yes / no / unknown
+- Observed session lifetime:
+- List endpoint: (method, URL, parameters, pagination)
+- PDF endpoint:
+- Stable document id:
+- History available: (years)
+- Protections: (captcha, anti-bot, rate limit)
+- Allowed domains:
+- Inspiration sources: (links, license; never copied)
+- Status: stable / beta / broken / unmaintained
+- Last verified on: (date, offline only | live by maintainer)
+- Maintainer:

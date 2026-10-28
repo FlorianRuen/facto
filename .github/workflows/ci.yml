@@ -1,0 +1,51 @@
+# Pin every action to a full commit SHA at setup (OpenSSF Scorecard "Pinned-Dependencies").
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - uses: golangci/golangci-lint-action@v8
+      - run: go install mvdan.cc/gofumpt@latest && make fmt-check
+      - uses: rhysd/actionlint@v1
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - run: go test -race -count=1 ./...
+        env: { FACTO_CANARY: "1" }
+
+  cover-and-leaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - run: make cover leakcheck
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - uses: actions/setup-node@v4
+        with: { node-version: lts/* }
+      - run: make e2e
+      - run: npx playwright install --with-deps chromium && npx playwright test web/capture
+        if: hashFiles('web/capture/package.json') != ''
