@@ -42,6 +42,30 @@ var sharedHostingSuffixes = map[string]struct{}{
 	"herokuapp.com": {}, "appspot.com": {}, "blogspot.com": {},
 	"cloudfront.net": {}, "amazonaws.com": {}, "azurewebsites.net": {},
 	"web.app": {}, "firebaseapp.com": {},
+	// Object storage and edge/PaaS hosting.
+	"s3.amazonaws.com": {}, "blob.core.windows.net": {}, "r2.dev": {},
+	"workers.dev": {}, "storage.googleapis.com": {}, "googleusercontent.com": {},
+	"onrender.com": {}, "fly.dev": {},
+}
+
+// sharedHosting reports whether host (lowercased) is a shared-hosting
+// suffix: one of sharedHostingSuffixes, or an Amazon S3 regional endpoint
+// "s3.<region>.amazonaws.com", "s3-website.<region>.amazonaws.com" or
+// "s3.dualstack.<region>.amazonaws.com" for any region label.
+func sharedHosting(host string) bool {
+	if _, ok := sharedHostingSuffixes[host]; ok {
+		return true
+	}
+	rest, ok := strings.CutSuffix(host, ".amazonaws.com")
+	if !ok {
+		return false
+	}
+	for _, prefix := range []string{"s3.dualstack.", "s3-website.", "s3."} {
+		if region, ok := strings.CutPrefix(rest, prefix); ok && region != "" && !strings.Contains(region, ".") {
+			return true
+		}
+	}
+	return false
 }
 
 // ParseAllowlist accepts one or more patterns, each either a bare host
@@ -51,9 +75,16 @@ var sharedHostingSuffixes = map[string]struct{}{
 // non-ASCII byte, any other "*", leading or trailing ".", "..", and, exact
 // or after "*.", a single-label host ("com", "*.fr", "localhost") or a
 // built-in multi-label public suffix ("co.uk", "*.gouv.fr") or shared-hosting
-// suffix ("github.io", "*.netlify.app", "*.amazonaws.com"…), compared
-// case-insensitively. "*.example.co.uk", "*.impots.gouv.fr",
-// "myproject.github.io" and "*.myproject.github.io" stay valid.
+// suffix, compared case-insensitively. The shared-hosting suffixes are
+// github.io, pages.dev, netlify.app, vercel.app, herokuapp.com, appspot.com,
+// blogspot.com, cloudfront.net, amazonaws.com, azurewebsites.net, web.app,
+// firebaseapp.com, and the object-storage and edge hosts s3.amazonaws.com,
+// s3.<region>.amazonaws.com (any region label, also s3-website.<region> and
+// s3.dualstack.<region>), blob.core.windows.net, r2.dev, workers.dev,
+// storage.googleapis.com, googleusercontent.com, onrender.com and fly.dev.
+// "*.example.co.uk", "*.impots.gouv.fr", "myproject.github.io",
+// "*.myproject.github.io" and "mybucket.s3.eu-west-3.amazonaws.com" stay
+// valid.
 // This is the single source of truth for connector.Info.AllowedDomains.
 func ParseAllowlist(patterns []string) (Allowlist, error) {
 	if len(patterns) == 0 {
@@ -69,7 +100,7 @@ func ParseAllowlist(patterns []string) (Allowlist, error) {
 		if _, ps := publicSuffixes[host]; ps || !strings.Contains(host, ".") {
 			return Allowlist{}, fmt.Errorf("%w: entry %q is a public suffix", ErrInvalidAllowlist, p)
 		}
-		if _, sh := sharedHostingSuffixes[host]; sh {
+		if sharedHosting(host) {
 			return Allowlist{}, fmt.Errorf("%w: entry %q is a shared-hosting suffix", ErrInvalidAllowlist, p)
 		}
 		if wildcard {
