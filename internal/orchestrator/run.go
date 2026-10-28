@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"mime"
 
@@ -22,6 +23,7 @@ const (
 	StateBroken      State = "broken"
 	StateAuthFailed  State = "auth_failed"
 	StateRateLimited State = "rate_limited"
+	StateInterrupted State = "interrupted" // stopped by the run's cancellation
 )
 
 // Connectors is the connector source (*connector.Registry implements it).
@@ -79,21 +81,30 @@ var errNilSource = errors.New("orchestrator: nil connector source")
 // sentinel ends the connector with that state; any other Fetch or Ingest
 // error only fails that document. A panic in a connector (its methods or
 // the body it returned) is recovered: the connector is broken, the panic
-// value is never logged or reported, and the next connector runs.
+// value is never logged or reported, and the next connector runs. A body
+// whose Read panics inside Ingest is still closed (a panicking Close is
+// recovered too). A connector that panics before reporting an id (nil, or
+// Info panics) is labelled by its position in src.All(): "connector[<i>]".
+//
+// Only panics on the goroutine running Run can be recovered: a panic in a
+// goroutine a connector starts itself crashes the whole process. Connectors
+// must not start goroutines that can panic.
 //
 // A canceled ctx stops the loop: no further Login, Fetch or Put; the error
-// wraps ctx.Err() and the results so far are returned. Connector failures
-// are states, never Run errors.
+// wraps ctx.Err() and the results so far are returned. The connector that
+// was running when ctx was canceled is StateInterrupted unless it already
+// reached another state (it is never reported ok, even if its last document
+// was filed). Connector failures are states, never Run errors.
 func (o *Orchestrator) Run(ctx context.Context, src Connectors, p connector.Period) (RunResult, error) {
 	var out RunResult
 	if src == nil {
 		return out, fmt.Errorf("run: %w", errNilSource)
 	}
-	for _, c := range src.All() {
+	for i, c := range src.All() {
 		if err := ctx.Err(); err != nil {
 			return out, fmt.Errorf("run: %w", err)
 		}
-		out.Connectors = append(out.Connectors, o.runConnector(ctx, c, p))
+		out.Connectors = append(out.Connectors, o.runConnector(ctx, i, c, p))
 	}
 	if err := ctx.Err(); err != nil {
 		return out, fmt.Errorf("run: %w", err)
@@ -107,12 +118,20 @@ type connRun struct {
 	res   ConnectorResult
 	phase string
 	ref   *connector.DocumentRef // the ref being fetched or read, if any
+	body  io.Closer              // the fetched body not closed yet, if any
 	log   *slog.Logger
 }
 
-// runConnector runs c and returns its result. It never panics.
-func (o *Orchestrator) runConnector(ctx context.Context, c connector.Connector, p connector.Period) (res ConnectorResult) {
-	cr := &connRun{res: ConnectorResult{State: StateOK}, phase: phaseInfo, log: o.log}
+// runConnector runs c, the i-th connector of the source, and returns its
+// result. It never panics.
+func (o *Orchestrator) runConnector(ctx context.Context, i int, c connector.Connector, p connector.Period) (res ConnectorResult) {
+	// Until Info returns, the connector is known only by its position.
+	label := fmt.Sprintf("connector[%d]", i)
+	cr := &connRun{
+		res:   ConnectorResult{ID: label, State: StateOK},
+		phase: phaseInfo,
+		log:   o.log.With(slog.String("connector", label)),
+	}
 	defer func() {
 		// panic(nil) recovers as *runtime.PanicNilError (Go >= 1.21), so
 		// every panic is caught here.
@@ -123,19 +142,32 @@ func (o *Orchestrator) runConnector(ctx context.Context, c connector.Connector, 
 	}()
 	if c == nil {
 		cr.res.State = StateBroken
-		o.log.LogAttrs(ctx, slog.LevelError, "connector source returned a nil connector; marked broken")
+		cr.log.LogAttrs(ctx, slog.LevelError, "connector source returned a nil connector; marked broken")
 		return cr.res
 	}
 	o.runSteps(ctx, c, p, cr)
+	if cr.res.State == StateOK && ctx.Err() != nil {
+		cr.res.State = StateInterrupted
+		cr.log.LogAttrs(ctx, slog.LevelWarn, "connector interrupted by the run's cancellation",
+			slog.String("phase", cr.phase),
+			slog.String("state", string(StateInterrupted)))
+	}
 	return cr.res
 }
 
 // recovered marks a panicking connector broken. The panic value is
 // deliberately never formatted: it may hold a cookie, a token or a page
 // fragment. Only its dynamic type, the connector id and the phase are
-// logged; the redacting handler stays a second line of defence.
+// logged; the redacting handler stays a second line of defence. A body
+// left open by the panic is closed.
 func (o *Orchestrator) recovered(ctx context.Context, cr *connRun, v any) {
 	cr.res.State = StateBroken
+	closePanicked := false
+	if cr.body != nil {
+		b := cr.body
+		cr.body = nil
+		closePanicked = closeGuarded(b)
+	}
 	if cr.ref != nil {
 		cr.res.Documents = append(cr.res.Documents, DocResult{
 			Source:     cr.res.ID,
@@ -146,7 +178,21 @@ func (o *Orchestrator) recovered(ctx context.Context, cr *connRun, v any) {
 	}
 	cr.log.LogAttrs(ctx, slog.LevelError, "connector panicked; marked broken (panic value withheld)",
 		slog.String("phase", cr.phase),
-		slog.String("panic_type", fmt.Sprintf("%T", v)))
+		slog.String("panic_type", fmt.Sprintf("%T", v)),
+		slog.Bool("close_panicked", closePanicked))
+}
+
+// closeGuarded closes b and reports whether Close panicked. The panic value
+// is discarded unformatted, for the same reason as in recovered; a close
+// error changes nothing at this point.
+func closeGuarded(b io.Closer) (panicked bool) {
+	defer func() {
+		if recover() != nil {
+			panicked = true
+		}
+	}()
+	_ = b.Close()
+	return false
 }
 
 // runSteps validates, logs in, lists and fetches. It updates cr as it goes
@@ -247,7 +293,7 @@ func (o *Orchestrator) fetchOne(ctx context.Context, c connector.Connector, sess
 		return !stop && ctx.Err() == nil
 	}
 
-	cr.phase = phaseRead
+	cr.phase, cr.body = phaseRead, rc
 	res, _ := o.Ingest(ctx, Input{
 		Source:     info.ID,
 		ProviderID: ref.ProviderID,
@@ -268,7 +314,10 @@ func (o *Orchestrator) fetchOne(ctx context.Context, c connector.Connector, sess
 	// Ingest logged any failure of its own.
 	cr.res.Documents = append(cr.res.Documents, res)
 	cr.ref = nil
-	// Ingest has read everything it needs: a close error changes nothing.
+	// Cleared before Close, so a panicking Close is not closed again by the
+	// recovery. Ingest has read everything it needs: a close error changes
+	// nothing.
+	cr.body = nil
 	_ = rc.Close()
 	cr.phase = phaseList
 	return ctx.Err() == nil
