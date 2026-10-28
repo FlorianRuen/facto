@@ -2,6 +2,9 @@ package logx
 
 import (
 	"cmp"
+	"crypto/ecdsa"
+	"crypto/rsa"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log/slog"
@@ -35,6 +38,42 @@ var (
 // logx tests): they carry cookies, credentials, request state or keys.
 // Every crypto/... package is covered too (see sensitivePkg).
 var sensitivePkgs = []string{"net/http", "net/url", "net/http/cookiejar", "crypto"}
+
+// sensitiveStructs are the structs of sensitivePkgs a defined type may be
+// built on ("type U url.URL"): such a type has none of their methods and
+// lives in another package, so sensitivePkg misses it. sensitiveAlias maps it
+// back to the original with reflect's ConvertibleTo.
+var sensitiveStructs = []reflect.Type{
+	urlType, userinfoType, cookieType,
+	reflect.TypeFor[http.Request](), reflect.TypeFor[http.Response](),
+	reflect.TypeFor[http.Client](), reflect.TypeFor[http.Transport](),
+	reflect.TypeFor[http.Server](),
+	reflect.TypeFor[tls.Config](), reflect.TypeFor[tls.Certificate](),
+	reflect.TypeFor[tls.ConnectionState](),
+	reflect.TypeFor[ecdsa.PrivateKey](), reflect.TypeFor[rsa.PrivateKey](),
+}
+
+// sensitiveAlias returns the sensitive stdlib struct that t (a struct
+// defined outside sensitivePkgs) has as underlying type: one of
+// sensitiveStructs it converts to, else t itself when it has an unexported
+// field declared in a sensitive package (any other struct of those
+// packages, "type J cookiejar.Jar"). nil means t is not such an alias.
+func sensitiveAlias(t reflect.Type) reflect.Type {
+	if t.Kind() != reflect.Struct || sensitivePkg(t) {
+		return nil
+	}
+	for _, s := range sensitiveStructs {
+		if t.ConvertibleTo(s) {
+			return s
+		}
+	}
+	for i := range t.NumField() {
+		if f := t.Field(i); !f.IsExported() && (slices.Contains(sensitivePkgs, f.PkgPath) || strings.HasPrefix(f.PkgPath, "crypto/")) {
+			return t
+		}
+	}
+	return nil
+}
 
 // visit identifies a pointer, map or slice currently being walked, for cycle
 // detection. The type is part of the key so a struct and its first field,
@@ -200,7 +239,8 @@ func (w *walker) value(v reflect.Value, depth int) {
 	w.kind(v, depth)
 }
 
-// special renders URLs, userinfo, cookies, readers and writers and the
+// special renders URLs, userinfo, cookies, readers and writers, defined
+// types over sensitive stdlib structs (see sensitiveAlias) and the
 // other types of sensitive stdlib packages, exported or not, and reports
 // whether v was one of them. http.Header and url.Values are left to the map
 // walk, which masks sensitive keys.
@@ -209,6 +249,10 @@ func (w *walker) special(v reflect.Value) bool {
 	base := t
 	if t.Kind() == reflect.Pointer {
 		base = t.Elem()
+	}
+	if alias := sensitiveAlias(base); alias != nil {
+		w.aliased(v, alias)
+		return true
 	}
 	switch {
 	case base == userinfoType:
@@ -234,6 +278,24 @@ func (w *walker) special(v reflect.Value) bool {
 		return false
 	}
 	return true
+}
+
+// aliased renders v, whose type (pointers removed) is a defined type over
+// the sensitive stdlib struct alias, like a value of alias: URLs redacted,
+// userinfo masked, cookies reduced to their name, anything else opaque under
+// v's own type name.
+func (w *walker) aliased(v reflect.Value, alias reflect.Type) {
+	switch alias {
+	case userinfoType:
+		w.b.WriteString(Mask)
+	case urlType:
+		w.b.WriteString(redactURL(reflect.Indirect(v).Convert(urlType)))
+	case cookieType:
+		name := reflect.Indirect(v).FieldByName("Name").String()
+		w.b.WriteString(controlFree(Clean(name)) + "=" + Mask)
+	default:
+		w.opaque(v.Type())
+	}
 }
 
 // asError returns v as an error when it can be interfaced and implements
