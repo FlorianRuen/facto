@@ -34,6 +34,10 @@ var (
 	// ErrInsecurePerms reports a file or directory with group or world
 	// permission bits.
 	ErrInsecurePerms = errors.New("fsx: insecure permissions")
+	// ErrNotDurable reports that WriteAtomic renamed the new content into
+	// place but could not fsync the parent directory: name already holds the
+	// new data, which may not survive a crash.
+	ErrNotDurable = errors.New("fsx: written but parent directory not synced")
 )
 
 // Root confines every operation to one directory, using os.Root, so that
@@ -79,9 +83,11 @@ func cleanName(name string) (string, error) {
 
 // WriteAtomic writes data to name (slash-separated, relative to the root):
 // temp file in the same directory, created 0600, write, fsync, close, rename.
-// The final file is 0600 even if it replaced a broader file. On any error the
-// previous content of name is untouched and no temp file is left behind. The
-// parent directory must exist: otherwise the error wraps fs.ErrNotExist.
+// The final file is 0600 even if it replaced a broader file. On any error
+// before the rename the previous content of name is untouched and no temp file
+// is left behind. If the rename succeeded but fsyncing the parent directory
+// failed, the error wraps ErrNotDurable: name already holds the new content.
+// The parent directory must exist: otherwise the error wraps fs.ErrNotExist.
 func (r *Root) WriteAtomic(ctx context.Context, name string, data []byte) error {
 	return r.writeAtomic(ctx, name, func(w io.Writer) error {
 		if _, err := w.Write(data); err != nil {
@@ -169,13 +175,18 @@ func (r *Root) writeAtomic(ctx context.Context, name string, fill func(io.Writer
 	if err := r.root.Rename(tmp, osName); err != nil {
 		return fmt.Errorf("fsx write %q: rename: %w", name, err)
 	}
-	return syncDir(r.root, filepath.Dir(osName))
+	if err := syncDir(r.root, filepath.Dir(osName)); err != nil {
+		return fmt.Errorf("fsx write %q: %w: %w", name, ErrNotDurable, err)
+	}
+	return nil
 }
 
 // MkdirPrivate creates name and missing parents with mode 0700. It is
 // idempotent on an existing private directory, fails with ErrInsecurePerms if
 // the existing directory has group/world bits, and fails if name (or a parent)
-// is not a directory.
+// is not a directory. Only the final component's permissions are checked:
+// existing parents are used as they are (they are inside the root, whose own
+// permissions CheckPrivate verifies).
 func (r *Root) MkdirPrivate(name string) error {
 	osName, err := cleanName(name)
 	if err != nil {

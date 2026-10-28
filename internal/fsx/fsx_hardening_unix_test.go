@@ -30,7 +30,7 @@ func TestAppendPrivate_RefusesFIFOWithoutBlocking(t *testing.T) {
 		if err == nil {
 			t.Fatal("AppendPrivate on a FIFO: err = nil, want an error")
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("AppendPrivate on a FIFO blocked")
 	}
 }
