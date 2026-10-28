@@ -32,3 +32,6 @@ Format: `YYYY-MM-DD <milestone> <task> <done|BLOCKED(Hn)|NEEDS(Hn)>: <one line> 
 2026-10-28 J0 T21 follow-up done: fsx.ErrLinkUnsupported + startup ProbeLink, Put returns ref on ErrNotDurable, spec row updated (commit 7e68aae)
 2026-10-28 J0 T22 done: inbox scan/infer/Open/Done + fsx confined read API (ReadDir, OpenDir, OpenRegular) 88.5%; review: no blocking (commits ff067f9, fab5402)
 2026-10-28 J0 hardening queue (before T30): narrow ErrLinkUnsupported to EPERM/ENOTSUP/EXDEV; test hooks so fsx/inbox SameFile identity checks are exercised; logx keys code/pin/key; refuse wildcards over any *.amazonaws.com; defined types convertible to url/http structs
+2026-10-28 J0 T9 done: logx userinfo-with-space/quote leak closed, review confirmed (commit d3397ea); follow-up: mask raw URL quoted in url.Parse errors (in progress)
+2026-10-28 J0 T23 review BLOCKING: cancel between Put and Insert leaves an unindexed file stuck as "exists"; fix: Insert with context.WithoutCancel (in progress) (commit a63cf6a)
+2026-10-28 J0 T23 follow-ups: self-heal ErrExists when destination file has the same SHA-256 (needs a Destination read/hash method); replace Name()=="local" check with a RemoteRef kind
