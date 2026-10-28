@@ -40,7 +40,8 @@
 //	type Env struct { // exactly the spec fields
 //	    Secrets SecretResolver
 //	    Browser BrowserPool
-//	    HTTP    *http.Client
+//	    HTTP    *httpx.Client // T23b: the hardened, allowlisted client (never *http.Client:
+//	                          // its *url.Error would carry the full URL, query included)
 //	    Prompt  Prompter
 //	    Log     *slog.Logger
 //	}
@@ -97,7 +98,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"slices"
 	"strings"
 	"sync"
@@ -106,6 +106,7 @@ import (
 
 	"github.com/FlorianRuen/facto/internal/clock"
 	"github.com/FlorianRuen/facto/internal/connector"
+	"github.com/FlorianRuen/facto/internal/httpx"
 )
 
 // fakeConnector is a minimal in-memory connector: it proves the interface
@@ -166,15 +167,19 @@ func TestConnector_ContractRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
+	hc, err := httpx.New(validInfo("fakeprovider").AllowedDomains, httpx.Options{})
+	if err != nil {
+		t.Fatalf("httpx.New: %v", err)
+	}
 	env := connector.Env{
 		Secrets: nil,
 		Browser: nil,
-		HTTP:    &http.Client{},
+		HTTP:    hc,
 		Prompt:  nil,
 		Log:     slog.New(slog.DiscardHandler),
 	}
 	// Pin the Env field types from the spec.
-	pinEnv := func(connector.SecretResolver, connector.BrowserPool, *http.Client, connector.Prompter, *slog.Logger) {
+	pinEnv := func(connector.SecretResolver, connector.BrowserPool, *httpx.Client, connector.Prompter, *slog.Logger) {
 	}
 	pinEnv(env.Secrets, env.Browser, env.HTTP, env.Prompt, env.Log)
 

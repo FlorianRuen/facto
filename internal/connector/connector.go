@@ -11,10 +11,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"github.com/FlorianRuen/facto/internal/clock"
+	"github.com/FlorianRuen/facto/internal/httpx"
 )
 
 // Sentinels the orchestrator maps to a connector state (errors.Is).
@@ -90,11 +90,13 @@ type DocumentRef struct {
 	Extra       map[string]string
 }
 
-// Env is what the core hands a connector for Login.
+// Env is what the core hands a connector for Login. HTTP is the hardened
+// httpx client, never a bare *http.Client: net/http wraps errors in a
+// *url.Error that carries the full URL, query included.
 type Env struct {
 	Secrets SecretResolver // resolves bw://, keyring://… references
 	Browser BrowserPool    // headless or visible browser
-	HTTP    *http.Client   // persistent cookie jar, domain allowlist enforced
+	HTTP    *httpx.Client  // allowlisted, errors never carry the URL query
 	Prompt  Prompter       // asks the user for an OTP code
 	Log     *slog.Logger   // redacting handler
 }

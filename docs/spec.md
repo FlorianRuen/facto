@@ -197,7 +197,7 @@ type DocumentRef struct {
 type Env struct {
     Secrets  SecretResolver // resolves bw://, keyring://… references
     Browser  BrowserPool    // headless or visible browser
-    HTTP     *http.Client   // persistent cookie jar, domain allowlist enforced
+    HTTP     *httpx.Client  // allowlisted, errors never carry the URL query
     Prompt   Prompter       // asks the user for an OTP code
     Log      *slog.Logger   // redacting handler
 }
