@@ -293,3 +293,51 @@ func TestResolver_ConcurrentResolveAndClose(t *testing.T) {
 		t.Errorf("bw closed %d times, want 1", bw.closeCount())
 	}
 }
+
+// A hand-built Ref must not skip the checks ParseRef enforces: Bitwarden items
+// by UUID only, the fixed field set, keyring segments without "/" or "..".
+func TestResolver_ResolveRefRejectsNonCanonicalRef(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		ref  secret.Ref
+	}{
+		{name: "bw item name instead of uuid", ref: secret.Ref{Scheme: "bw", Item: "--session=x EDF login", Field: "password"}},
+		{name: "bw field outside the set", ref: secret.Ref{Scheme: "bw", Item: itemUUID, Field: "notes"}},
+		{name: "bw empty field", ref: secret.Ref{Scheme: "bw", Item: itemUUID}},
+		{name: "keyring item with slash", ref: secret.Ref{Scheme: "keyring", Item: "fa/cto", Field: "k"}},
+		{name: "keyring dot-dot segment", ref: secret.Ref{Scheme: "keyring", Item: "facto", Field: "../k"}},
+		{name: "keyring empty item", ref: secret.Ref{Scheme: "keyring", Field: "k"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			bw, kr := newProviders()
+			r := mustResolver(t, bw, kr)
+			s, err := r.ResolveRef(t.Context(), tc.ref)
+			if !errors.Is(err, secret.ErrInvalidRef) {
+				t.Fatalf("ResolveRef(%+v) error = %v, want ErrInvalidRef", tc.ref, err)
+			}
+			if !s.IsZero() {
+				t.Errorf("ResolveRef(%+v) returned a non-empty Secret with an error", tc.ref)
+			}
+			if n := bw.calls() + kr.calls(); n != 0 {
+				t.Errorf("providers called %d times, want 0", n)
+			}
+		})
+	}
+}
+
+// An upper-case UUID is canonicalized before it reaches the provider.
+func TestResolver_ResolveRefCanonicalizesUUID(t *testing.T) {
+	t.Parallel()
+	bw, kr := newProviders()
+	r := mustResolver(t, bw, kr)
+	s, err := r.ResolveRef(t.Context(), secret.Ref{Scheme: "bw", Item: strings.ToUpper(itemUUID), Field: "password"})
+	if err != nil || s.Expose() != "value-from-bw" {
+		t.Fatalf("ResolveRef = %q, %v; want value-from-bw, nil", s.Expose(), err)
+	}
+	if got, want := bw.resolved[0], (secret.Ref{Scheme: "bw", Item: itemUUID, Field: "password"}); got != want {
+		t.Errorf("provider got %+v, want canonical %+v", got, want)
+	}
+}

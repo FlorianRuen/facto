@@ -1,13 +1,13 @@
-// Tests for package secrets core (J0 task T10): the Secret value type, secret
+// Tests for package secret core (J0 task T10): the Secret value type, secret
 // references and the scheme-dispatching Resolver. Spec: docs/spec.md
 // "Security and credentials" (Password managers; Data in memory and in
 // output). Providers (keyring T18, Bitwarden T19) and config (T13) build on
 // this API. Resolver tests live in resolver_test.go, ParseRef in ref_test.go.
 //
-// Import rule: secrets imports only the standard library (log/slog for
+// Import rule: secret imports only the standard library (log/slog for
 // LogValuer). It must NOT import internal/logx: logx honours slog.LogValuer,
 // which is how a Secret stays masked through the redacting handler, so logx
-// needs no knowledge of secrets either. These tests use the stdlib slog
+// needs no knowledge of secret either. These tests use the stdlib slog
 // handlers only.
 //
 // Expected API (implementer: follow exactly):
@@ -106,12 +106,12 @@
 //	func (r *Resolver) CloseAll() error
 //
 //	var (
-//	    ErrInvalidRef      = errors.New("secrets: invalid reference")
-//	    ErrNoProvider      = errors.New("secrets: no provider for scheme")
-//	    ErrDuplicateScheme = errors.New("secrets: duplicate provider scheme")
-//	    ErrInvalidProvider = errors.New("secrets: invalid provider")
-//	    ErrClosed          = errors.New("secrets: resolver closed")
-//	    ErrSecretNotFound  = errors.New("secrets: secret not found") // returned by providers (T18, T19)
+//	    ErrInvalidRef      = errors.New("secret: invalid reference")
+//	    ErrNoProvider      = errors.New("secret: no provider for scheme")
+//	    ErrDuplicateScheme = errors.New("secret: duplicate provider scheme")
+//	    ErrInvalidProvider = errors.New("secret: invalid provider")
+//	    ErrClosed          = errors.New("secret: resolver closed")
+//	    ErrSecretNotFound  = errors.New("secret: secret not found") // returned by providers (T18, T19)
 //	)
 package secret_test
 

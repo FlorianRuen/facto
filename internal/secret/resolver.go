@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -30,7 +31,10 @@ var (
 type Provider interface {
 	// Scheme is the reference scheme this provider serves.
 	Scheme() string
-	// Resolve returns the secret ref points to.
+	// Resolve returns the secret ref points to. It must honour ctx (CloseAll
+	// waits for in-flight calls) and return a fresh Secret the caller owns,
+	// never a cached one: copies share storage, so a caller's Wipe would
+	// clear the cache too.
 	Resolve(ctx context.Context, ref Ref) (Secret, error)
 	// Close locks the backend and wipes session keys.
 	Close() error
@@ -79,7 +83,9 @@ func (r *Resolver) Resolve(ctx context.Context, ref string) (Secret, error) {
 	return r.ResolveRef(ctx, parsed)
 }
 
-// ResolveRef calls the provider registered for ref.Scheme. It returns an
+// ResolveRef calls the provider registered for ref.Scheme. A Bitwarden or
+// keyring Ref must be in the form ParseRef returns (wraps ErrInvalidRef
+// otherwise; an upper-case UUID is lowered). It returns an
 // error wrapping ctx.Err() when ctx is already done, ErrClosed after
 // CloseAll, ErrNoProvider when no provider serves the scheme (the provider is
 // not called in these cases), or the provider error wrapped with %w. A
@@ -94,10 +100,17 @@ func (r *Resolver) ResolveRef(ctx context.Context, ref Ref) (Secret, error) {
 	if r.closed {
 		return Secret{}, ErrClosed
 	}
+	if err := ctx.Err(); err != nil {
+		return Secret{}, fmt.Errorf("resolve secret: %w", err)
+	}
 	p, ok := r.providers[ref.Scheme]
 	if !ok {
 		// The scheme of a hand-built Ref is not trusted: not echoed.
 		return Secret{}, ErrNoProvider
+	}
+	ref, err := canonical(ref)
+	if err != nil {
+		return Secret{}, err
 	}
 	s, err := p.Resolve(ctx, ref)
 	if err != nil {
@@ -123,6 +136,24 @@ func (r *Resolver) CloseAll() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// canonical re-applies the ParseRef checks to a Ref of a known scheme, so a
+// hand-built Ref cannot reach a provider with an item name, a field outside
+// the set or a keyring item holding "/". Other schemes are left to their
+// provider.
+func canonical(ref Ref) (Ref, error) {
+	if ref.Scheme != SchemeBitwarden && ref.Scheme != SchemeKeyring {
+		return ref, nil
+	}
+	c, err := ParseRef(ref.String())
+	if err != nil {
+		return Ref{}, err
+	}
+	if c.Field != ref.Field || !strings.EqualFold(c.Item, ref.Item) {
+		return Ref{}, invalid("hand-built reference does not match its canonical form")
+	}
+	return c, nil
 }
 
 // isScheme reports whether s matches ^[a-z][a-z0-9]*$.
