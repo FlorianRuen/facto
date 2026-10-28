@@ -40,12 +40,15 @@ const TruncatedSuffix = "…[truncated]"
 // defaultKeys are the sensitive key fragments. A fragment of more than
 // shortFragment bytes matches when the lowercased key contains it; a shorter
 // one must equal a whole word of the key (see words), so "auth" masks
-// "X-Auth" and "basicAuth" but not "author".
+// "X-Auth" and "basicAuth" but not "author", and "code", "pin" and "key"
+// mask "otp_code", "PinCode" and "X-Key" but not "barcode", "pincode" or
+// "keyboard". The rule is lexical: "country_code" and "status_code" are
+// masked too, an accepted loss of log detail.
 var defaultKeys = []string{
 	"cookie", "authorization", "token", "password", "passwd", "passphrase",
 	"secret", "session", "apikey", "api_key", "api-key", "credential",
 	"pwd", "pass", "auth", "otp", "totp", "bearer", "jwt", "csrf", "xsrf", "sid",
-	"sessid", "mdp", "motdepasse", "mot_de_passe",
+	"sessid", "mdp", "motdepasse", "mot_de_passe", "code", "pin", "key",
 }
 
 // shortFragment is the length up to which a fragment matches whole words

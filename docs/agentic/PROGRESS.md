@@ -40,3 +40,4 @@ Format: `YYYY-MM-DD <milestone> <task> <done|BLOCKED(Hn)|NEEDS(Hn)>: <one line> 
 2026-10-28 J0 T24 review BLOCKING: body left open after a read panic; fix in progress with interrupted state and goroutine-panic docs (commit 374295d)
 2026-10-28 J0 T10 BLOCKED(H1): rechecked, writes under internal/secrets/ still denied (mkdir refused); blocks T13, T18, T19 -> T25 -> T26, T27 -> T28 (inbox e2e) -> T30
 2026-10-28 J0 hardening 2 done: test hooks (openDirHook, openRegularHook, doneRecheckHook) prove fsx OpenDir/OpenRegular and inbox Done identity checks fire (mutations now caught); Done doc names the remaining recheck-to-Remove window
+2026-10-28 J0 hardening 3 done: logx default whole-word keys code, pin, key (keyboard/pincode/zipcode/barcode kept; country_code/status_code masked, documented)
