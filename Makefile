@@ -43,12 +43,18 @@ e2e:
 leakcheck:
 	./scripts/leakcheck.sh
 
+# Every scanner runs even when an earlier one fails: each line records its exit
+# status in .cache/audit/<name>.status (the line itself always succeeds), then
+# scripts/scanners-json writes security/scanners.json through fsx and exits
+# non-zero if any scanner failed or left no status, which fails the target.
 audit:
-	govulncheck ./...
-	gosec -quiet -severity high ./...
-	gitleaks detect --no-banner --redact
-	osv-scanner --recursive .
-	$(GO) run ./scripts/scanners-json > security/scanners.json
+	rm -rf .cache/audit
+	mkdir -p -m 700 .cache/audit
+	umask 077; govulncheck ./...; echo $$? > .cache/audit/govulncheck.status
+	umask 077; gosec -quiet -severity high ./...; echo $$? > .cache/audit/gosec.status
+	umask 077; gitleaks detect --no-banner --redact; echo $$? > .cache/audit/gitleaks.status
+	umask 077; osv-scanner --recursive .; echo $$? > .cache/audit/osv-scanner.status
+	$(GO) run ./scripts/scanners-json
 
 score-check:
 	./scripts/check-score.sh
