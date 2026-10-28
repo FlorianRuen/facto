@@ -22,10 +22,10 @@ websites themselves.
 | Cookie theft through the automated browser (CDP port) | CDP over a pipe, else random 127.0.0.1 port, short browser life | Not started (J1) |
 | Reading the Chromium profile | Disposable 0700 profile, deleted after login | Not started (J1) |
 | Reading persisted sessions | AEAD-encrypted sessions, key in keyring or password manager; `sessions: ephemeral` | Not started (J1, `internal/vault`) |
-| Leak through sync | Refuse a state dir inside the output folder or a synced folder | Decided (ADR 0007, D1); check pending with config loading |
-| Leak in logs, reports, errors | `Secret` type, redaction by key and pattern, no HTTP bodies logged | Redacting logger and clean reports done; `Secret` type pending |
-| Leak through the command line | No secret in argv; subprocess-only environment | Pending (`internal/secret`, CLI) |
-| Leak through a memory dump | `RLIMIT_CORE=0`, `PR_SET_DUMPABLE=0` on Linux | Pending (`internal/proc`) |
+| Leak through sync | Refuse a state dir inside the output folder or a synced folder | Done in `internal/config` (ADR 0007, D1); name-based, see limitations |
+| Leak in logs, reports, errors | `Secret` type, redaction by key and pattern, no HTTP bodies logged | Done: redacting logger, clean reports, `secret.Secret` (`internal/secret`) |
+| Leak through the command line | No secret in argv; subprocess-only environment | Done in `internal/secret/bitwarden`; CLI wiring pending |
+| Leak through a memory dump | `RLIMIT_CORE=0`, `PR_SET_DUMPABLE=0` on Linux | Done in `internal/proc`; wired with the CLI |
 | Leak through a bug report | Redaction, CI canary scan, clean `--report` | Canary scan (`make leakcheck`) and clean report done |
 | Exfiltration by a connector | Per-connector domain allowlist in the HTTP client | Done in `internal/httpx` and `internal/orchestrator` |
 | Compromised dependency | Minimal deps, scanners, pinned tools, signed releases | Scanners and pinned tools done (`make audit`, ADR 0001); releases J4 |
@@ -217,6 +217,105 @@ Files dropped in `inbox/` are untrusted input.
   file is refused.
 - A database written by a newer facto (newer schema) is refused.
 
+### Secret providers (`internal/secret`)
+
+**The `Secret` type.**
+
+- `secret.Secret` never renders its value. `String`, `GoString`, `Format` (every
+  verb, width and flag), `MarshalJSON`, `MarshalText` (used by XML and other text
+  encoders) and `LogValue` all produce `***`.
+- The value is only reachable through `Expose`, called at the last call site.
+- `Wipe` zeroes the bytes and empties the secret. Copies share storage, so wiping
+  one copy clears every copy. `Wipe` is idempotent and safe on the zero value.
+- `New` takes ownership of a `[]byte` without copying, so `Wipe` clears it.
+  `FromString` copies a string, which itself cannot be wiped.
+- A provider returns a fresh `Secret` on every call, never a cached one. When a
+  provider returns a value together with an error, the resolver wipes it.
+
+**References.**
+
+- Config holds references, never values. Two forms are accepted, nothing else:
+  - `bw://<uuid>/<username|password|totp>`: the item is a UUID (8-4-4-4-12 hex,
+    lowered). An item name is refused.
+  - `keyring://<service>/<key>`: segments of `[A-Za-z0-9._-]`, not `.` or `..`.
+- Whitespace, userinfo, port, query, fragment, percent-encoding and empty
+  segments are refused. A parse error never quotes the input.
+- **Hand-built refs are re-validated.** The resolver and each provider re-parse
+  a `Ref` built in code and refuse it unless it matches its canonical form. A
+  hand-built Bitwarden ref cannot carry an item name or another field.
+
+**Bitwarden provider (`internal/secret/bitwarden`).**
+
+- The provider runs the Bitwarden CLI through a `Runner`. Arguments are fixed
+  subcommands plus a validated UUID. No secret is ever on argv.
+- **Master password.** Asked only in interactive mode. It is passed to
+  `unlock --raw --passwordenv FACTO_BW_MASTER_PASSWORD` through that one
+  subprocess environment, then wiped. A non-interactive run with a locked vault
+  fails with `ErrLocked`.
+- **Session key.** Lives in a `Secret`. It reaches the CLI only in the
+  `BW_SESSION` variable of each subprocess. A session key injected from the
+  user's terminal is reused when the vault reports `unlocked`.
+- **Minimal environment.** Only a fixed list of non-secret variables is
+  inherited: `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `LC_ALL`, `TZ`, `TMPDIR`,
+  `XDG_CONFIG_HOME`, `XDG_RUNTIME_DIR`, `BITWARDENCLI_APPDATA_DIR`,
+  `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, and on Windows
+  `SYSTEMROOT`, `WINDIR`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `TEMP`, `TMP`.
+  facto's own `BW_SESSION`, `BW_PASSWORD` and `NODE_OPTIONS` are never passed on.
+- `BW_NOINTERACTION=true` is always set, so the CLI never prompts. Stdin is empty.
+- **Output cap.** Stdout and stderr are each capped at 64 KiB. A larger output
+  fails the command. Buffers are wiped after use, and when they grow.
+- **Lock and wipe.** `Close` runs `lock` and wipes the session key. Any fatal
+  error (CLI crash, unreadable or oversized output, another item returned,
+  canceled command) does the same, and later calls fail with `ErrLocked`. The
+  lock runs with a non-cancelled context (30 s timeout), even when the caller's
+  context was canceled. A missing item only returns `ErrSecretNotFound`.
+- **Never used:** `serve`, `list`, `--session`, `--passwordfile`. Items are
+  fetched by UUID only.
+- Error messages never contain CLI output or the runner's error text.
+
+**Keyring provider (`internal/secret/keyring`).**
+
+- Reads `keyring://<service>/<key>` through go-keyring (ADR 0005). Tests use a
+  fake backend.
+- A missing or empty entry wraps `secret.ErrSecretNotFound`.
+- **Backend errors are opaque:** the message is always `keyring: backend error`.
+  The original error stays reachable through `errors.Is` and `errors.As`, but its
+  text, which may echo the value, is never printed.
+
+### Configuration (`internal/config`)
+
+- **Regular file only.** `config.yaml` is opened through fsx. A symlink,
+  directory or FIFO is refused, never followed nor read.
+- **Owner-only on Unix.** Any group or world bit is refused (want `0600`).
+- **64 KiB cap**, checked before decoding and again while reading.
+- **Strict decoding.** Unknown keys, duplicate keys, wrong types and a second
+  YAML document are errors (exit code `2`).
+- **Secret fields hold references.** `login`, `password` and `otp` must be empty
+  or a valid reference. A plaintext value is refused with a fixed message.
+- **No-echo policy.** Errors name the key and the line, never a scalar value,
+  an anchor name or a custom YAML tag. This keeps a password pasted in the wrong
+  field out of the terminal, logs and reports. Errors may still print user text
+  that is not a value: key names (including unknown keys), connector ids (only
+  once known to be a valid slug) and naming-template placeholders.
+- **State dir placement** (ADR 0007, D1). `state_dir` must not equal or sit
+  inside `output.local`. It must not sit inside a synced folder: Google Drive,
+  Dropbox, OneDrive, iCloud Drive, Nextcloud, ownCloud, pCloud, Box, and any
+  `Library/CloudStorage/` provider on macOS. Detection is by folder name, on
+  whole path components, case-insensitive. The home directory's own components
+  are not checked. Symlinks are not resolved.
+- `~` and `~/…` expand with an injected home directory. `~user` and relative
+  paths are refused.
+
+### Process hardening (`internal/proc`)
+
+- On Linux, `proc.Harden` sets `RLIMIT_CORE` soft and hard limits to `0`, so the
+  process cannot raise them again: no core dump.
+- It then sets `PR_SET_DUMPABLE` to `0`: other processes of the same user cannot
+  ptrace-attach or read `/proc/<pid>/mem`.
+- Outside Linux (macOS, Windows), `Harden` is a no-op today. It is idempotent.
+- It is meant to run before any secret is touched. It is wired with the CLI;
+  until then nothing calls it.
+
 ### Canary tests and scanners
 
 - Tests inject unique canary secrets. `make leakcheck` scans every file, log and
@@ -269,6 +368,22 @@ Files dropped in `inbox/` are untrusted input.
 - **Inbox removal window.** Between the final identity check and the removal of a
   filed inbox file, a few syscalls remain. A file renamed over it exactly then
   would be removed instead.
-- **Not enforced yet** (pending J0 tasks): the `Secret` type and secret
-  references, config validation (state dir outside output and synced folders,
-  config file permissions), and core-dump hardening.
+- **Go strings cannot be wiped.** `Wipe` clears the bytes a `Secret` owns, not
+  the strings around it: the value returned by the keyring backend, the
+  username and password decoded from the Bitwarden item JSON, and every value
+  exposed into the subprocess environment (`exec.Cmd.Env`). These copies stay in
+  memory until the garbage collector reuses it.
+- **Subprocess environment is readable by the same user.** While the CLI runs,
+  `BW_SESSION` and, during unlock, the master password variable can be read by
+  any process of the same uid through `/proc/<pid>/environ` of the CLI
+  subprocess. `PR_SET_DUMPABLE` on facto does not cover its children. This is a
+  known gap against the "another program on the same machine" attacker.
+- **`Close` locks the user's own session.** When a session key from the user's
+  terminal is injected, `Close` still runs `lock`. The user's terminal session
+  is locked too and must be unlocked again.
+- **YAML merge keys and aliases are accepted.** Strict decoding refuses unknown
+  and duplicate keys but not `<<` merge keys, anchors or aliases.
+- **State dir sync detection is name-based.** A synced folder with an unusual
+  name, or reached through a symlink, is not detected.
+- **Config permissions are not checked on Windows**, like fsx.
+- **Process hardening is Linux-only** and not active until the CLI calls it.

@@ -12,9 +12,10 @@ Credential Manager and Linux Secret Service without CGO.
 
 ## Decision
 `github.com/zalando/go-keyring` **v0.2.8** (2026-03-23), wrapped by
-`internal/secret` behind a small interface (`Get(service, user) (string, error)`); the
-returned string is converted to `secret.Secret` immediately. Tests use a fake, never the
-real keyring (T18). `ErrNotFound` maps to `secrets.ErrSecretNotFound`.
+`internal/secret/keyring` behind a small interface (`Backend.Get(service, user) (string, error)`);
+the returned string is converted to `secret.Secret` immediately. Tests use a fake, never the
+real keyring (T18). go-keyring's `ErrNotFound` maps to `keyring.ErrNotFound`, which wraps
+`secret.ErrSecretNotFound`.
 
 Backends (read in v0.2.8 sources):
 - macOS: runs `/usr/bin/security`; `Set` sends the password on stdin (`security -i`),
