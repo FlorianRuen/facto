@@ -165,7 +165,8 @@ func (c *Client) Get(ctx context.Context, rawURL string) (*http.Response, error)
 // Do sends req. Before any connection, for the request and for every
 // redirect hop, a scheme other than https wraps ErrInsecureScheme and a host
 // (URL host or explicit req.Host) outside the allowlist, or with a port
-// other than 443, wraps ErrDomainNotAllowed. On such an early rejection, as
+// other than 443, or a URL with a non-empty Opaque, wraps
+// ErrDomainNotAllowed. On such an early rejection, as
 // on a nil URL, req.Body is closed like net/http.Client.Do does; a hop the
 // guard rejects later (a 307/308 redirect replaying the body through
 // req.GetBody) has its body closed exactly once too. Following more than
@@ -209,6 +210,13 @@ func closeBody(req *http.Request) {
 func (c *Client) check(req *http.Request) error {
 	if !strings.EqualFold(req.URL.Scheme, "https") {
 		return fmt.Errorf("%w: %s", ErrInsecureScheme, req.URL.Host)
+	}
+	// An opaque URL makes net/http write the request line in absolute
+	// form from Opaque ("GET https://other/x"), whose authority a front end
+	// honours over Host: the dialled, allowlisted host would not be the
+	// effective target. Opaque is never echoed: it may carry a query.
+	if req.URL.Opaque != "" {
+		return fmt.Errorf("%w: %s (opaque url)", ErrDomainNotAllowed, req.URL.Host)
 	}
 	if !c.allow.Allows(req.URL.Host) {
 		return fmt.Errorf("%w: %s", ErrDomainNotAllowed, req.URL.Host)
