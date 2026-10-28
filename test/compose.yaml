@@ -1,0 +1,37 @@
+# E2E services (J0 T27). Started by `make e2e`:
+#   docker compose -f test/compose.yaml up -d --wait vaultwarden
+#
+# vaultwarden is the local Bitwarden-compatible server the Bitwarden secret
+# provider E2E runs against (J1, plan item 34). It holds synthetic test
+# accounts only, lives in a tmpfs (nothing persists after `down -v`) and is
+# reachable from the host loopback only.
+#
+# The image is pinned by tag AND digest: the digest is what is pulled, the tag
+# documents the version. To bump: `docker pull vaultwarden/server:<tag>` then
+# `docker image inspect --format '{{index .RepoDigests 0}}' vaultwarden/server:<tag>`.
+name: facto-e2e
+
+services:
+  vaultwarden:
+    image: vaultwarden/server:1.37.4@sha256:efb3cde962015fcc036b2ea625242248611943b27212ebf4392841fb30fad055
+    environment:
+      ROCKET_ADDRESS: 0.0.0.0
+      ROCKET_PORT: "8080"
+      SIGNUPS_ALLOWED: "true" # synthetic E2E accounts only; never exposed off loopback
+      INVITATIONS_ALLOWED: "false"
+      SHOW_PASSWORD_HINT: "false"
+      LOG_LEVEL: warn
+    ports:
+      - "127.0.0.1:8087:8080"
+    tmpfs:
+      - /data:mode=0700
+    # no-new-privileges (security_opt) is refused by some Docker AuthZ
+    # plugins; dropping every capability is accepted and covers most of it.
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8080/alive"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s

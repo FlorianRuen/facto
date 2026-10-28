@@ -1,0 +1,11 @@
+name: version
+description: >
+  facto version prints "facto <version> (<go version> <os>/<arch>)" on stdout,
+  nothing on stderr, and exits 0 (J0 T27).
+args: [version]
+expect:
+  exit: 0
+  stdout:
+    prefix: "facto "
+  stderr:
+    empty: true
