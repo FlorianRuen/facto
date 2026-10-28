@@ -411,7 +411,7 @@ func TestClient_DomainMatching(t *testing.T) {
 		{[]string{"example.com"}, "EXAMPLE.com", true},
 		{[]string{"Example.COM"}, "example.com", true},
 		{[]string{"example.com"}, "example.com:443", true},
-		{[]string{"example.com"}, "example.com:8443", true},
+		{[]string{"example.com"}, "example.com:8443", false}, // only the default HTTPS port is allowed
 		{[]string{"example.com"}, "www.example.com", false},
 		{[]string{"example.com"}, "evil-example.com", false},
 		{[]string{"example.com"}, "example.com.evil.net", false},

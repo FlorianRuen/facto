@@ -1,9 +1,9 @@
 // Package httpx is the only way facto does network I/O (CLAUDE.md rule 5).
 // A Client enforces a per-connector domain allowlist on every request and
-// every redirect hop before any connection is made, speaks HTTPS only with
-// TLS >= 1.2 and certificate verification always on, never reads proxy
-// environment variables, bounds every request with a timeout and keeps
-// cookies in a jar. Its errors keep their cause chain but never carry a
+// every redirect hop before any connection is made (default HTTPS port only,
+// no public-suffix entry), speaks HTTPS only with TLS >= 1.2 and certificate
+// verification always on, never reads proxy environment variables, bounds
+// every request with a timeout and keeps cookies in a jar. Its errors keep their cause chain but never carry a
 // query string, fragment, userinfo or header value. See docs/spec.md
 // "Threat model" (exfiltration by a connector).
 //
@@ -47,6 +47,9 @@ const (
 	tlsHandshakeTimeout = 15 * time.Second
 	idleConnTimeout     = 90 * time.Second
 )
+
+// errNilContext is returned by Get for a nil context.
+var errNilContext = errors.New("httpx: nil context")
 
 // errURLWithheld replaces a cause whose message would echo part of a URL or
 // a header value.
@@ -144,9 +147,13 @@ func (c *Client) Jar() http.CookieJar {
 	return c.hc.Jar
 }
 
-// Get builds a GET request with ctx and calls Do. A malformed rawURL is an
-// error that does not echo rawURL.
+// Get builds a GET request with ctx and calls Do. A nil ctx is an error
+// naming the context; a malformed rawURL is an error that does not echo
+// rawURL. Neither dials.
 func (c *Client) Get(ctx context.Context, rawURL string) (*http.Response, error) {
+	if ctx == nil {
+		return nil, errNilContext
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, http.NoBody)
 	if err != nil {
 		// err is a *url.Error embedding rawURL: drop it.
@@ -157,16 +164,22 @@ func (c *Client) Get(ctx context.Context, rawURL string) (*http.Response, error)
 
 // Do sends req. Before any connection, for the request and for every
 // redirect hop, a scheme other than https wraps ErrInsecureScheme and a host
-// (URL host or explicit req.Host) outside the allowlist wraps
-// ErrDomainNotAllowed. Following more than MaxRedirects redirects is an
+// (URL host or explicit req.Host) outside the allowlist, or with a port
+// other than 443, wraps ErrDomainNotAllowed. On such an early rejection, as
+// on a nil URL, req.Body is closed like net/http.Client.Do does. Following more than MaxRedirects redirects is an
 // error. Errors keep their cause chain and name the host, but no error in
 // the chain contains a query string, fragment, userinfo or header value. The
 // timeout covers reading the body: close it to release the request.
 func (c *Client) Do(req *http.Request) (*http.Response, error) {
-	if req == nil || req.URL == nil {
-		return nil, errors.New("httpx: nil request or url")
+	if req == nil {
+		return nil, errors.New("httpx: nil request")
+	}
+	if req.URL == nil {
+		closeBody(req)
+		return nil, errors.New("httpx: nil url")
 	}
 	if err := c.check(req); err != nil {
+		closeBody(req)
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(req.Context(), c.timeout)
@@ -179,6 +192,15 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	}
 	resp.Body = &cancelBody{ReadCloser: resp.Body, cancel: cancel}
 	return resp, nil
+}
+
+// closeBody closes req.Body, if any, on a rejection that happens before
+// net/http takes ownership of it. A close error is irrelevant: the request
+// already failed.
+func closeBody(req *http.Request) {
+	if req.Body != nil {
+		_ = req.Body.Close()
+	}
 }
 
 // check enforces the scheme and the allowlist on one hop.
