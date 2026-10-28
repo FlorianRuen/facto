@@ -94,7 +94,7 @@ func (r *Root) WriteAtomic(ctx context.Context, name string, data []byte) error 
 			return fmt.Errorf("write: %w", err)
 		}
 		return nil
-	})
+	}, r.rename)
 }
 
 // WriteAtomicFrom is WriteAtomic streaming from src (used for downloads). An
@@ -103,7 +103,52 @@ func (r *Root) WriteAtomic(ctx context.Context, name string, data []byte) error 
 func (r *Root) WriteAtomicFrom(ctx context.Context, name string, src io.Reader) error {
 	return r.writeAtomic(ctx, name, func(w io.Writer) error {
 		return copyCtx(ctx, w, src)
-	})
+	}, r.rename)
+}
+
+// WriteNew is WriteAtomicFrom that never replaces anything: the fsynced temp
+// file is published under name with a hard link (os.Root.Link), which fails
+// when name already exists, whatever it is (regular file, directory, symlink,
+// even dangling, FIFO), then the temp file is removed. Of several concurrent
+// WriteNew calls on the same name exactly one succeeds. name is never visible
+// before its content is complete. When something is already at name the
+// error wraps fs.ErrExist and that entry is left untouched; on any error no
+// temp file is left behind and name is not created. If fsyncing the parent
+// directory failed after the link, the error wraps ErrNotDurable: name already
+// holds the new content. The parent directory must exist (fs.ErrNotExist
+// otherwise). The filesystem must support hard links.
+func (r *Root) WriteNew(ctx context.Context, name string, src io.Reader) error {
+	osName, err := cleanName(name)
+	if err != nil {
+		return err
+	}
+	// Fail fast before streaming a whole download for nothing; the link
+	// below is what actually enforces no-replace.
+	if _, err := r.root.Lstat(osName); err == nil {
+		return fmt.Errorf("fsx write new %q: %w", name, fs.ErrExist)
+	}
+	return r.writeAtomic(ctx, name, func(w io.Writer) error {
+		return copyCtx(ctx, w, src)
+	}, r.link)
+}
+
+// link publishes tmp as osName without replacing anything, then removes tmp.
+func (r *Root) link(tmp, osName string) error {
+	if err := r.root.Link(tmp, osName); err != nil {
+		return fmt.Errorf("link: %w", err)
+	}
+	if err := r.root.Remove(tmp); err != nil {
+		return fmt.Errorf("linked but remove temp: %w", err)
+	}
+	return nil
+}
+
+// rename publishes tmp as osName, replacing whatever was there.
+func (r *Root) rename(tmp, osName string) error {
+	if err := r.root.Rename(tmp, osName); err != nil {
+		return fmt.Errorf("rename: %w", err)
+	}
+	return nil
 }
 
 // copyCtx copies src to w, checking ctx before every read.
@@ -128,7 +173,9 @@ func copyCtx(ctx context.Context, w io.Writer, src io.Reader) error {
 	}
 }
 
-func (r *Root) writeAtomic(ctx context.Context, name string, fill func(io.Writer) error) (err error) {
+// writeAtomic writes a temp file next to name with fill, fsyncs it, then
+// hands it to publish (rename or link) and fsyncs the parent directory.
+func (r *Root) writeAtomic(ctx context.Context, name string, fill func(io.Writer) error, publish func(tmp, osName string) error) (err error) {
 	osName, err := cleanName(name)
 	if err != nil {
 		return err
@@ -172,8 +219,8 @@ func (r *Root) writeAtomic(ctx context.Context, name string, fill func(io.Writer
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("fsx write %q: %w", name, err)
 	}
-	if err := r.root.Rename(tmp, osName); err != nil {
-		return fmt.Errorf("fsx write %q: rename: %w", name, err)
+	if err := publish(tmp, osName); err != nil {
+		return fmt.Errorf("fsx write %q: %w", name, err)
 	}
 	if err := syncDir(r.root, filepath.Dir(osName)); err != nil {
 		return fmt.Errorf("fsx write %q: %w: %w", name, ErrNotDurable, err)
