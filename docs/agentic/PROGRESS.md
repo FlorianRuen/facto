@@ -41,3 +41,4 @@ Format: `YYYY-MM-DD <milestone> <task> <done|BLOCKED(Hn)|NEEDS(Hn)>: <one line> 
 2026-10-28 J0 T10 BLOCKED(H1): rechecked, writes under internal/secrets/ still denied (mkdir refused); blocks T13, T18, T19 -> T25 -> T26, T27 -> T28 (inbox e2e) -> T30
 2026-10-28 J0 hardening 2 done: test hooks (openDirHook, openRegularHook, doneRecheckHook) prove fsx OpenDir/OpenRegular and inbox Done identity checks fire (mutations now caught); Done doc names the remaining recheck-to-Remove window
 2026-10-28 J0 hardening 3 done: logx default whole-word keys code, pin, key (keyboard/pincode/zipcode/barcode kept; country_code/status_code masked, documented)
+2026-10-28 J0 hardening 4 done: httpx refuses wildcards below amazonaws.com except one tenant directly under a known S3 suffix (existing storage_suffix_test keeps *.mybucket.s3.<region> valid); exact tenant hosts stay valid

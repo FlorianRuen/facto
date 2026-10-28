@@ -68,6 +68,20 @@ func sharedHosting(host string) bool {
 	return false
 }
 
+// awsWildcardRefused reports whether a wildcard over base (lowercased) is
+// refused because base is below amazonaws.com, where AWS keeps adding
+// multi-tenant endpoints (s3-<region>, s3-website-<region>, s3-fips,
+// s3-accesspoint, execute-api, elb…). The only exception is a base that is
+// one tenant label directly below a known shared endpoint other than
+// amazonaws.com itself ("mybucket.s3.eu-west-3.amazonaws.com").
+func awsWildcardRefused(base string) bool {
+	if !strings.HasSuffix(base, ".amazonaws.com") {
+		return false
+	}
+	_, parent, _ := strings.Cut(base, ".")
+	return parent == "amazonaws.com" || !sharedHosting(parent)
+}
+
 // ParseAllowlist accepts one or more patterns, each either a bare host
 // ("api.example.com") or "*." followed by a bare host. Refused (wraps
 // ErrInvalidAllowlist): empty list, empty entry, scheme, path, port,
@@ -84,7 +98,11 @@ func sharedHosting(host string) bool {
 // storage.googleapis.com, googleusercontent.com, onrender.com and fly.dev.
 // "*.example.co.uk", "*.impots.gouv.fr", "myproject.github.io",
 // "*.myproject.github.io" and "mybucket.s3.eu-west-3.amazonaws.com" stay
-// valid.
+// valid. A wildcard below amazonaws.com is refused too ("*.s3-eu-west-3…",
+// "*.execute-api.<region>…", "*.<region>.elb…"), unless its base is one
+// tenant directly below one of the S3 suffixes above
+// ("*.mybucket.s3.eu-west-3.amazonaws.com"); an exact tenant host
+// ("abc123.execute-api.eu-west-3.amazonaws.com") stays valid.
 // This is the single source of truth for connector.Info.AllowedDomains.
 func ParseAllowlist(patterns []string) (Allowlist, error) {
 	if len(patterns) == 0 {
@@ -102,6 +120,9 @@ func ParseAllowlist(patterns []string) (Allowlist, error) {
 		}
 		if sharedHosting(host) {
 			return Allowlist{}, fmt.Errorf("%w: entry %q is a shared-hosting suffix", ErrInvalidAllowlist, p)
+		}
+		if wildcard && awsWildcardRefused(host) {
+			return Allowlist{}, fmt.Errorf("%w: entry %q is a wildcard below amazonaws.com", ErrInvalidAllowlist, p)
 		}
 		if wildcard {
 			a.suffixes = append(a.suffixes, "."+host)
