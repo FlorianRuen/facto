@@ -155,12 +155,20 @@ func yamlError(data []byte, err error) error {
 		return fmt.Errorf("%w: %s", ErrInvalid, msg)
 	}
 	keys := keyLines(data)
-	msgs := make([]string, 0, len(te.Errors))
-	for _, m := range te.Errors {
+	shown := te.Errors[:min(len(te.Errors), maxTypeErrors)]
+	msgs := make([]string, 0, len(shown)+1)
+	for _, m := range shown {
 		msgs = append(msgs, cleanTypeError(m, keys))
+	}
+	if n := len(te.Errors) - len(shown); n > 0 {
+		msgs = append(msgs, fmt.Sprintf("and %d more", n))
 	}
 	return fmt.Errorf("%w: %s", ErrInvalid, strings.Join(msgs, "; "))
 }
+
+// maxTypeErrors caps the type errors reported for one document: a file of
+// thousands of wrongly typed items yields a short message, in bounded time.
+const maxTypeErrors = 20
 
 // cleanTypeError rewrites one yaml.v3 unmarshal error message.
 func cleanTypeError(m string, keys map[int]string) string {
