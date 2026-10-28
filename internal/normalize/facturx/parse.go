@@ -132,6 +132,11 @@ func nsTag(space string) string {
 // ParseCII parses a CII document of at most MaxSize bytes. Errors wrap
 // ErrTooLarge, ErrUnsafeXML, ErrNotCII, ErrInvalid or the reader's error; on
 // error the returned Invoice is always the zero value.
+//
+// Parsing is fail-closed: a malformed value in any extracted field, even an
+// optional one (an unparsable issue date or grand total, say), fails the whole
+// parse with ErrInvalid instead of returning the other fields. Callers then
+// fall back to the next naming source rather than file a half-read invoice.
 func ParseCII(r io.Reader) (Invoice, error) {
 	buf, err := io.ReadAll(io.LimitReader(r, MaxSize+1))
 	if err != nil {
