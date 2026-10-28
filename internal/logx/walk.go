@@ -3,7 +3,9 @@ package logx
 import (
 	"cmp"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/url"
 	"reflect"
 	"slices"
 	"strconv"
@@ -18,6 +20,10 @@ var (
 	logValuerType = reflect.TypeFor[slog.LogValuer]()
 	stringerType  = reflect.TypeFor[fmt.Stringer]()
 	errorType     = reflect.TypeFor[error]()
+	readerType    = reflect.TypeFor[io.Reader]()
+	writerType    = reflect.TypeFor[io.Writer]()
+	urlType       = reflect.TypeFor[url.URL]()
+	userinfoType  = reflect.TypeFor[url.Userinfo]()
 )
 
 // visit identifies a pointer, map or slice currently being walked, for cycle
@@ -84,8 +90,23 @@ func hasMethods(t reflect.Type) bool {
 	return t.Implements(logValuerType) || t.Implements(stringerType) || t.Implements(errorType)
 }
 
-// value renders v at the given depth. Order: nil, depth bound, bytes,
-// LogValuer, error, Stringer, then by kind.
+// isStream reports whether t, or a pointer to t, implements io.Reader or
+// io.Writer. Such values (buffers, builders, request bodies, files) hold
+// content the walker must never print, not even through String().
+func isStream(t reflect.Type) bool {
+	if t.Implements(readerType) || t.Implements(writerType) {
+		return true
+	}
+	if t.Kind() != reflect.Pointer && t.Kind() != reflect.Interface {
+		p := reflect.PointerTo(t)
+		return p.Implements(readerType) || p.Implements(writerType)
+	}
+	return false
+}
+
+// value renders v at the given depth. Order: nil, depth bound, URL and
+// userinfo, readers and writers, bytes, LogValuer, error, Stringer, then by
+// kind.
 func (w *walker) value(v reflect.Value, depth int) {
 	if w.stop() {
 		return
@@ -106,6 +127,9 @@ func (w *walker) value(v reflect.Value, depth int) {
 		w.value(v.Elem(), depth)
 		return
 	}
+	if w.special(v) {
+		return
+	}
 	if isBytes(v.Type()) {
 		w.b.WriteString(Mask)
 		return
@@ -121,6 +145,52 @@ func (w *walker) value(v reflect.Value, depth int) {
 		return
 	}
 	w.kind(v, depth)
+}
+
+// special renders URLs, userinfo, readers and writers, exported or not, and
+// reports whether v was one of them.
+func (w *walker) special(v reflect.Value) bool {
+	t := v.Type()
+	base := t
+	if t.Kind() == reflect.Pointer {
+		base = t.Elem()
+	}
+	switch {
+	case base == userinfoType:
+		w.b.WriteString(Mask)
+	case base == urlType:
+		if t.Kind() == reflect.Pointer {
+			v = v.Elem()
+		}
+		w.b.WriteString(redactURL(v))
+	case isStream(t):
+		w.opaque(t)
+	default:
+		return false
+	}
+	return true
+}
+
+// redactURL renders a url.URL value without its userinfo, query values or
+// fragment. It reads the fields through reflection so an unexported field
+// is handled too; an opaque part is masked whole.
+func redactURL(v reflect.Value) string {
+	field := func(name string) string { return v.FieldByName(name).String() }
+	u := url.URL{
+		Scheme:  field("Scheme"),
+		Host:    field("Host"),
+		Path:    field("Path"),
+		RawPath: field("RawPath"),
+	}
+	if field("Opaque") != "" {
+		u.Opaque = Mask
+	}
+	s := u.String()
+	if field("RawQuery") != "" || field("Fragment") != "" || field("RawFragment") != "" ||
+		v.FieldByName("ForceQuery").Bool() {
+		s += "?" + Mask
+	}
+	return s
 }
 
 // methods renders x through LogValue, Error or String when it has one, and
@@ -197,25 +267,31 @@ func (w *walker) leave(v reflect.Value) {
 	delete(w.seen, visit{t: v.Type(), p: v.Pointer()})
 }
 
-// mapValue renders a map in key order. With string keys, a sensitive key
-// masks its value.
+// mapKey renders a map key for display and sensitivity matching: a string
+// (named or not, possibly inside an interface) is its text, anything else
+// its walked form.
+func (w *walker) mapKey(k reflect.Value, depth int) string {
+	for k.Kind() == reflect.Interface && !k.IsNil() {
+		k = k.Elem()
+	}
+	if k.Kind() == reflect.String {
+		return k.String()
+	}
+	sub := walker{h: w.h, limit: w.limit, seen: w.seen}
+	sub.value(k, depth+1)
+	return sub.b.String()
+}
+
+// mapValue renders a map in key order. A key whose rendered form is
+// sensitive masks its value, whatever the key type.
 func (w *walker) mapValue(v reflect.Value, depth int) {
 	type entry struct {
 		key string
 		val reflect.Value
 	}
-	stringKeys := v.Type().Key().Kind() == reflect.String
 	var entries []entry
 	for it := v.MapRange(); it.Next(); {
-		var key string
-		if stringKeys {
-			key = it.Key().String()
-		} else {
-			sub := walker{h: w.h, limit: w.limit, seen: w.seen}
-			sub.value(it.Key(), depth+1)
-			key = sub.b.String()
-		}
-		entries = append(entries, entry{key: key, val: it.Value()})
+		entries = append(entries, entry{key: w.mapKey(it.Key(), depth), val: it.Value()})
 	}
 	slices.SortFunc(entries, func(a, b entry) int { return cmp.Compare(a.key, b.key) })
 	w.b.WriteString("map[")
@@ -227,7 +303,7 @@ func (w *walker) mapValue(v reflect.Value, depth int) {
 			w.b.WriteString(" ")
 		}
 		w.b.WriteString(Clean(e.key) + ":")
-		if stringKeys && w.h.sensitive(e.key) {
+		if w.h.sensitive(e.key) {
 			w.b.WriteString(Mask)
 			continue
 		}

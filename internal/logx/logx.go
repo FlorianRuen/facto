@@ -2,8 +2,10 @@
 // through (CLAUDE.md rule 5). It masks values by key (cookie, authorization,
 // token, password, session…) at any group depth, masks token patterns (JWT,
 // long base64, URL query strings and userinfo) in messages and string values,
-// walks composite values (maps, structs, slices) to mask sensitive map keys,
-// struct fields and byte values, renders errors and arbitrary values to
+// walks composite values (maps, structs, slices) to mask sensitive map keys
+// of any key type, struct fields and byte values, renders url.URL without
+// userinfo, query values or fragment, masks url.Userinfo, never prints a
+// value implementing io.Reader or io.Writer (bodies, buffers, builders), renders errors and arbitrary values to
 // cleaned, length-capped strings, and resolves slog.LogValuer first so types
 // such as secrets.Secret mask themselves. See docs/spec.md "Data in memory
 // and in output".
@@ -37,7 +39,7 @@ const TruncatedSuffix = "…[truncated]"
 var defaultKeys = []string{
 	"cookie", "authorization", "token", "password", "passwd", "passphrase",
 	"secret", "session", "apikey", "api_key", "api-key", "credential",
-	"pwd", "auth", "otp", "totp", "bearer", "jwt", "csrf", "xsrf", "sid",
+	"pwd", "pass", "auth", "otp", "totp", "bearer", "jwt", "csrf", "xsrf", "sid",
 	"sessid", "mdp", "motdepasse", "mot_de_passe",
 }
 
