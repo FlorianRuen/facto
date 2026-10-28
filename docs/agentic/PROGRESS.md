@@ -70,3 +70,4 @@ Format: `YYYY-MM-DD <milestone> <task> <done|BLOCKED(Hn)|NEEDS(Hn)>: <one line> 
 2026-10-28 J0 T27 done: e2e harness + scenario parser + Vaultwarden 1.37.4 pinned by digest (798bbd6)
 2026-10-28 J0 T28 done: inbox e2e scenario + security negatives; make e2e exit 0, --- PASS: TestE2E/inbox (ea8a848); case (c) filed as kind invoice (no per-provider kind in config)
 2026-10-28 J0 T25 review: 2 blocking (symlinked output.local refused; nolint without issue) fixed test-first in 6a38c4a — local.New(ctx, dir), SIGTERM, ErrConfig wrap, bounded prompt read, mid-run cancel test; cmd/facto 92.1%, make verify exit 0 on clean worktree
+2026-10-28 J0 T30 red-team: 24 new attacks (secret, keyring, bitwarden, config, proc, CLI), 21 defended; 2 findings fixed — state dir inside output via symlink (Medium, dbea43b), naming template echoed in errors (Low, 601cee3); YAML type errors capped at 20 (df6cca5); make verify exit 0 on clean worktree of df6cca5
