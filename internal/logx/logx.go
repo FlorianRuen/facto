@@ -3,7 +3,8 @@
 // messages, masks values by key (cookie, authorization,
 // token, password, session…) at any group depth, masks token patterns (JWT,
 // long base64, the query string and userinfo of URLs of any scheme, the raw
-// URL quoted by net/url parse errors) in messages and string values, walks composite values (maps, structs,
+// URL quoted by net/url parse errors, the value after a sensitive key or a
+// Bearer/Basic scheme in free text) in messages and string values, walks composite values (maps, structs,
 // slices) to mask sensitive map keys of any key type, struct fields and byte
 // values, renders url.URL without userinfo, query values or fragment, masks
 // url.Userinfo, renders an http.Cookie as its name only, never prints a
@@ -69,8 +70,7 @@ type Options struct {
 // passing it on. It is immutable and safe for concurrent use.
 type Handler struct {
 	inner  slog.Handler
-	keys   []string // lowercased fragments matched with strings.Contains
-	words  []string // lowercased short fragments matched as whole words
+	frag   fragments // sensitive key fragments, defaults plus Options.Keys
 	maxErr int
 	// masked is set once a sensitive WithGroup name was opened: every
 	// attribute logged inside it is masked.
@@ -79,19 +79,13 @@ type Handler struct {
 
 // NewHandler returns a Handler redacting records before inner sees them.
 func NewHandler(inner slog.Handler, opts Options) *Handler {
-	h := &Handler{inner: inner, maxErr: opts.MaxErrorLen}
+	h := &Handler{
+		inner:  inner,
+		maxErr: opts.MaxErrorLen,
+		frag:   splitFragments(slices.Concat(defaultKeys, opts.Keys)),
+	}
 	if h.maxErr <= 0 {
 		h.maxErr = DefaultMaxErrorLen
-	}
-	for _, k := range slices.Concat(defaultKeys, opts.Keys) {
-		switch k = strings.ToLower(k); {
-		case k == "":
-			// An empty fragment would match every key.
-		case len(k) <= shortFragment && isWord(k):
-			h.words = append(h.words, k)
-		default:
-			h.keys = append(h.keys, k)
-		}
 	}
 	return h
 }
@@ -158,21 +152,7 @@ func cleanKey(k string) string {
 // sensitive reports whether key, lowercased, contains a long sensitive
 // fragment or has a short one as a whole word.
 func (h *Handler) sensitive(key string) bool {
-	k := strings.ToLower(key)
-	for _, f := range h.keys {
-		if strings.Contains(k, f) {
-			return true
-		}
-	}
-	if len(h.words) == 0 {
-		return false
-	}
-	for _, w := range words(key) {
-		if slices.Contains(h.words, w) {
-			return true
-		}
-	}
-	return false
+	return h.frag.match(key)
 }
 
 // isWord reports whether s is made of ASCII letters and digits only.

@@ -27,17 +27,19 @@ const minTokenRun = 16
 
 // Clean masks token patterns in s, in this order: the raw URL quoted by
 // net/url parse errors (see maskParseErrors), JWTs, long base64 runs,
-// then the userinfo of URLs of any scheme (removed) and query/fragment (replaced by "?***").
+// then the userinfo of URLs of any scheme (removed) and query/fragment (replaced by "?***"),
+// then the value following a sensitive key or an authorization scheme in
+// free text (see maskKeyValues).
 // File names, slugs, UUIDs, paths, hex digests and plain words survive.
 func Clean(s string) string {
 	s = maskParseErrors(s)
 	s = jwtRe.ReplaceAllLiteralString(s, Mask)
 	s = maskBase64(s)
-	if !strings.Contains(s, "://") { // both URL patterns need it
-		return s
+	if strings.Contains(s, "://") { // both URL patterns need it
+		s = userinfoRe.ReplaceAllString(s, "$1")
+		s = urlRe.ReplaceAllStringFunc(s, cleanURL)
 	}
-	s = userinfoRe.ReplaceAllString(s, "$1")
-	return urlRe.ReplaceAllStringFunc(s, cleanURL)
+	return maskKeyValues(s)
 }
 
 // isB64 reports whether c belongs to the standard or URL-safe base64
