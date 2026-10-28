@@ -171,6 +171,11 @@ func collectInto(ctx context.Context, e env, cfg *config.Config, d collectDeps, 
 	if err := ensureDir(inboxPath, noFollowLink); err != nil {
 		return false, fmt.Errorf("inbox folder: %w", err)
 	}
+	// Before the index creates the state dir: config.Validate only compared
+	// the path text, and output.local may be a symlink.
+	if err := checkStateDirOutside(cfg.StateDir, cfg.Output.Local); err != nil {
+		return false, err
+	}
 
 	idx, err := store.Open(ctx, cfg.StateDir, e.Clock)
 	if err != nil {
