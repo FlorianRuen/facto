@@ -56,6 +56,11 @@ from one allowlist.
 - **Port 443 only.** A host with any other port, an empty port or `:0443` never
   matches.
 - **The `Host` header** is checked too when it differs from the URL host.
+- **Opaque URLs are refused** on every request and redirect hop. A URL with a
+  non-empty `Opaque` (`//other-host/path` next to an allowlisted `Host`) would make
+  `net/http` write an absolute-form request line naming another host, which a
+  shared front end may honour (domain fronting). The error names the host only,
+  never the opaque part.
 - **No proxy from the environment.** httpx never reads `HTTPS_PROXY` and friends.
   A proxy is used only when the caller passes one explicitly; nothing does today.
 - **Bounded:** 60 s default timeout (body read included), 10 redirects max, body
@@ -80,6 +85,16 @@ from one allowlist.
 - **Cancellation:** the connector running when the run is canceled is reported
   `interrupted`, never `ok`.
 - Error text never reaches the report. Details go to the redacted log only.
+- **ProviderID policy.** Before any lookup, fetch or write, each
+  `DocumentRef.ProviderID` is checked. It is refused when it is over 128 bytes,
+  is not valid UTF-8, holds `://`, `?` or `=` (a download link or query used as
+  the id), whitespace, a control, format or other non-printable character, or has
+  the shape of a JWT (three dot-separated base64url segments, the first starting
+  with `eyJ`). A refused document is reported `invalid`, without the id, and is
+  never fetched, indexed, named or logged; the connector's other documents go on.
+  Long alphanumeric ids (`FACTURE2026000123`, `in_1MtHbELkdIwHu7ixl4OzzPMv`) are
+  accepted: they look like tokens to the log patterns but are real invoice
+  numbers. The empty id (no dedup key) is valid.
 - Exit codes (`orchestrator.ExitCode`): `0` all ok or no connector, `1` any
   connector not ok or a failed or canceled run, `2` configuration error.
 
@@ -91,10 +106,31 @@ Every facto logger goes through `logx.Handler`.
   `token`, `password`, `secret`, `session`, `auth`, `otp`, `csrf`, `sid`, `mdp`,
   `code`, `pin`, `key` and more. Short fragments match whole words only (`auth`
   masks `X-Auth`, not `author`). A sensitive group name masks everything inside.
+- **Keys and group names are cleaned too.** Attribute keys, map keys and group
+  names (`slog.Group`, `WithGroup`, `With`) go through the same pattern masking
+  and lose their control characters, so a secret used as a key is not written.
+  Whether a key is sensitive is decided on the original key.
 - **Nested values:** maps (any key type), structs, slices and byte values are
   walked; sensitive keys and fields inside them are masked.
 - **By pattern**, in messages and strings: JWTs, long base64 strings, and the
   userinfo, query and fragment of URLs of **any scheme**.
+- **Free text `key=value`:** in messages, strings and error text, the value after
+  a sensitive key is masked, case-insensitively: `password=v`, `password: v`,
+  `password = "v"`, JSON `"password":"v"` and re-quoted `\"password\":\"v\"`.
+  An unquoted value ends at whitespace or punctuation (`&;,"'<>()[]{}`), a quoted
+  one at its closing quote.
+- **Authorization schemes:** the credential after a whole word `Bearer` or
+  `Basic` is masked (`got Bearer ***`).
+- **Header lines:** when an unquoted key holding `cookie` or `authorization`
+  (`Set-Cookie`, `Proxy-Authorization`) is followed by `:`, the value runs to the
+  end of the line. An authorization line keeps a `Bearer` or `Basic` scheme and
+  masks the rest; any other scheme (`Token`, `Digest`, `Negotiate`) or a malformed
+  one (`Bearer: x`) is masked whole. A cookie line masks its first value, then
+  every later cookie value and bare token, keeping only the Set-Cookie
+  attributes (`Path`, `Domain`, `Expires`, `Max-Age`, `SameSite`, `Priority`,
+  `Secure`, `HttpOnly`, `Partitioned`). In fmt's one-line rendering of an
+  `http.Header` (`map[Cookie:[…] X:[…]]`) the value ends at its `]`. The scan
+  runs in linear time.
 - **Parse errors:** the raw URL that `net/url` quotes in its errors is masked,
   including the port, escape and `ParseAddr` reasons that repeat password bytes.
 - **Standard library types fail closed:** `url.URL` is rendered without userinfo,
@@ -166,6 +202,9 @@ Files dropped in `inbox/` are untrusted input.
   never replacing an earlier report. An existing reports folder with group or
   world bits is refused.
 - Reports hold no error text, no file content and no secret.
+- Origins, provider ids and paths go through the same pattern masking as logs
+  (`logx.Clean`) when the report is rendered, as JSON or text. An accepted
+  provider id that looks like a token is therefore masked in the report.
 - The text report escapes control, format and bidi characters from untrusted file
   names.
 
@@ -200,6 +239,22 @@ Files dropped in `inbox/` are untrusted input.
   `/`, then `#`, in that order, the bytes between that `@` and the `#` can stay
   visible in a logged `net/url` parse error. They cannot be told apart from a
   host and path.
+- **Free-text masking is lexical and has gaps.** The `key=value` masking in
+  messages and error text is a safety net, not a parser. It misses:
+  - unquoted values of several words: `password: correct horse battery` keeps
+    `horse battery` (only the first word is masked; a quoted value is masked
+    whole);
+  - a key and its value split across lines (`password\n: hunter`);
+  - XML elements (`<password>hunter</password>`), `=>` or `->` separators,
+    positional pairs (`'password', 'hunter'`) and keys made of spaced words
+    (`mot de passe: hunter`).
+  Structured attributes (`slog.String("password", v)`) do not have these gaps:
+  they are masked by key.
+- **Free-text masking also over-masks.** Some ordinary text loses a word:
+  `Basic plan invoice` becomes `Basic *** invoice`, `invalid token: expected 3
+  parts` becomes `invalid token: *** 3 parts`, and `status_code=500` becomes
+  `status_code=***` (`code` is a sensitive key fragment). Log detail is traded for
+  safety.
 - **Inbox removal window.** Between the final identity check and the removal of a
   filed inbox file, a few syscalls remain. A file renamed over it exactly then
   would be removed instead.
