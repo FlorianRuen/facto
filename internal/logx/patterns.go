@@ -19,16 +19,28 @@ var (
 	// precisely when the userinfo holds such characters. It may over-mask text
 	// between a scheme and a later "@", which is the safe direction.
 	userinfoRe = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)[^/?#\r\n]*@`)
+	// parseArgRe matches the raw URL that a net/url error quotes after
+	// "parse" (url.Error with Op "parse"), up to the last double quote of
+	// the line followed by ": " or the end of the line. It is greedy on
+	// purpose: the URL may hold escaped or unescaped quotes, and running
+	// past the real end only masks more.
+	parseArgRe = regexp.MustCompile(`(?m)\bparse "([^\r\n]*)"(: |$)`)
+	// invalidPortRe matches the port quoted by net/url's "invalid port"
+	// error, which is part of the password when the userinfo holds an
+	// unencoded "/", "?" or "#".
+	invalidPortRe = regexp.MustCompile(`\binvalid port "(?:[^"\\\r\n]|\\.)*"`)
 )
 
 // minTokenRun is the number of consecutive alphanumerics that make a run of
 // base64 characters look like a token.
 const minTokenRun = 16
 
-// Clean masks token patterns in s, in this order: JWTs, long base64 runs,
+// Clean masks token patterns in s, in this order: the raw URL quoted by
+// net/url parse errors (see maskParseErrors), JWTs, long base64 runs,
 // then the userinfo of URLs of any scheme (removed) and query/fragment (replaced by "?***").
 // File names, slugs, UUIDs, paths, hex digests and plain words survive.
 func Clean(s string) string {
+	s = maskParseErrors(s)
 	s = jwtRe.ReplaceAllLiteralString(s, Mask)
 	s = maskBase64(s)
 	s = userinfoRe.ReplaceAllString(s, "$1")
@@ -117,4 +129,32 @@ func cleanURL(u string) string {
 		rest = rest[:q] + "?" + Mask
 	}
 	return scheme + rest
+}
+
+// maskParseErrors masks the raw URL that a net/url parse error quotes
+// (`parse "<raw>": <reason>`). The URL patterns cannot be trusted there: a
+// userinfo holding an unencoded "/", "?" or "#" ends the authority inside the
+// password, and url.Parse cuts the quoted URL at "#". Everything up to the
+// last "@" becomes "***@" (the scheme goes too, so the URL patterns leave the
+// rest alone), the query and fragment of what remains become "?***", and an
+// argument without "@" is replaced whole: `parse "***"`. The port quoted by
+// an "invalid port" reason is masked as well.
+func maskParseErrors(s string) string {
+	if !strings.Contains(s, `parse "`) {
+		return s
+	}
+	s = parseArgRe.ReplaceAllStringFunc(s, func(m string) string {
+		sub := parseArgRe.FindStringSubmatch(m)
+		arg, end := sub[1], sub[2]
+		masked := Mask
+		if at := strings.LastIndexByte(arg, '@'); at >= 0 {
+			tail := arg[at+1:]
+			if q := strings.IndexAny(tail, "?#"); q >= 0 {
+				tail = tail[:q] + "?" + Mask
+			}
+			masked = Mask + "@" + tail
+		}
+		return `parse "` + masked + `"` + end
+	})
+	return invalidPortRe.ReplaceAllLiteralString(s, `invalid port "`+Mask+`"`)
 }

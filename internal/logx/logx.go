@@ -1,8 +1,8 @@
 // Package logx provides the redacting slog handler every facto logger goes
 // through (CLAUDE.md rule 5). It masks values by key (cookie, authorization,
 // token, password, session…) at any group depth, masks token patterns (JWT,
-// long base64, the query string and userinfo of URLs of any scheme) in
-// messages and string values, walks composite values (maps, structs,
+// long base64, the query string and userinfo of URLs of any scheme, the raw
+// URL quoted by net/url parse errors) in messages and string values, walks composite values (maps, structs,
 // slices) to mask sensitive map keys of any key type, struct fields and byte
 // values, renders url.URL without userinfo, query values or fragment, masks
 // url.Userinfo, renders an http.Cookie as its name only, never prints a
