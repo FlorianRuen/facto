@@ -63,6 +63,7 @@ type Deps struct {
 	Namer   Namer        // required
 	Log     *slog.Logger // nil = discard; New always wraps its handler in logx.NewHandler
 	MaxSize int64        // <= 0 = DefaultMaxSize
+	NewHTTP HTTPFactory  // client per connector; nil = httpx.New(allowed, httpx.Options{})
 }
 
 // Orchestrator files documents. It is safe for sequential use; the pipeline
@@ -73,6 +74,7 @@ type Orchestrator struct {
 	namer   Namer
 	log     *slog.Logger
 	maxSize int64
+	newHTTP HTTPFactory
 }
 
 // New validates d and returns an Orchestrator. A missing Index, Dest or
@@ -95,7 +97,12 @@ func New(d Deps) (*Orchestrator, error) {
 	if maxSize <= 0 {
 		maxSize = DefaultMaxSize
 	}
+	newHTTP := d.NewHTTP
+	if newHTTP == nil {
+		newHTTP = defaultHTTP
+	}
 	return &Orchestrator{
+		newHTTP: newHTTP,
 		idx:     d.Index,
 		dst:     d.Dest,
 		namer:   d.Namer,

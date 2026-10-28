@@ -52,11 +52,27 @@ type Warning struct {
 	Reason string // inbox.Reason value, or ReasonNotRemoved
 }
 
+// ConnectorStatus is one connector line of the report.
+type ConnectorStatus struct {
+	ID    string
+	State State
+}
+
 // Report is the outcome of one run.
 type Report struct {
 	StartedAt, FinishedAt time.Time
+	Connectors            []ConnectorStatus // empty = not rendered (pre-T24 format)
 	Documents             []DocResult
 	Warnings              []Warning
+}
+
+// AddRun appends one ConnectorStatus per res.Connectors entry, in order, and
+// their Documents after the existing ones.
+func (r *Report) AddRun(res RunResult) {
+	for _, c := range res.Connectors {
+		r.Connectors = append(r.Connectors, ConnectorStatus{ID: c.ID, State: c.State})
+		r.Documents = append(r.Documents, c.Documents...)
+	}
 }
 
 // reportVersion is the JSON report format version.
@@ -66,9 +82,15 @@ type jsonReport struct {
 	ReportVersion int            `json:"report_version"`
 	StartedAt     string         `json:"started_at"`
 	FinishedAt    string         `json:"finished_at"`
+	Connectors    []jsonConn     `json:"connectors,omitempty"`
 	Counts        map[Status]int `json:"counts"`
 	Documents     []jsonDoc      `json:"documents"`
 	Warnings      []jsonWarning  `json:"warnings"`
+}
+
+type jsonConn struct {
+	ID    string `json:"id"`
+	State State  `json:"state"`
 }
 
 type jsonDoc struct {
@@ -106,6 +128,9 @@ func (r Report) JSON() ([]byte, error) {
 		Counts:        r.counts(),
 		Documents:     make([]jsonDoc, 0, len(r.Documents)),
 		Warnings:      make([]jsonWarning, 0, len(r.Warnings)),
+	}
+	for _, c := range r.Connectors {
+		out.Connectors = append(out.Connectors, jsonConn(c))
 	}
 	for _, d := range r.Documents {
 		out.Documents = append(out.Documents, jsonDoc(d))
@@ -148,6 +173,12 @@ func (r Report) Text() string {
 	}
 	b.WriteString("warnings: " + strconv.Itoa(len(r.Warnings)) + "\n")
 
+	if len(r.Connectors) > 0 {
+		b.WriteString("\nconnectors:\n")
+		for _, c := range r.Connectors {
+			b.WriteString("- " + escapeJoin([]string{string(c.State), c.ID}) + "\n")
+		}
+	}
 	if len(r.Documents) > 0 {
 		b.WriteString("\ndocuments:\n")
 		for _, d := range r.Documents {
