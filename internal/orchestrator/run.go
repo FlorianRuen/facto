@@ -13,7 +13,6 @@ import (
 
 	"github.com/FlorianRuen/facto/internal/connector"
 	"github.com/FlorianRuen/facto/internal/httpx"
-	"github.com/FlorianRuen/facto/internal/logx"
 	"github.com/FlorianRuen/facto/internal/normalize"
 )
 
@@ -351,8 +350,10 @@ const maxProviderIDLen = 128
 // file name. The empty id (no dedup key) is valid. An id is refused when it
 // is longer than maxProviderIDLen bytes, is not valid UTF-8, holds "://",
 // "?" or "=" (a URL or a query: a buggy connector using the download link as
-// the id), a whitespace, control or other non-printable character, or
-// anything logx.Clean would mask (a token).
+// the id), a whitespace, control or other non-printable character, or has
+// the shape of a JWT (a bearer token used as the id). Long alphanumeric runs
+// are accepted: supplier invoice numbers look like them, and reports clean
+// the id through logx anyway.
 func validProviderID(id string) bool {
 	if len(id) > maxProviderIDLen || !utf8.ValidString(id) {
 		return false
@@ -365,7 +366,33 @@ func validProviderID(id string) bool {
 			return false
 		}
 	}
-	return logx.Clean(id) == id
+	return !isJWTShaped(id)
+}
+
+// isJWTShaped reports whether id is three dot-separated base64url segments,
+// the first starting with "eyJ" (a base64url JSON object) and the first two
+// non-empty: a signed or unsigned ("alg":"none") JSON Web Token.
+func isJWTShaped(id string) bool {
+	if !strings.HasPrefix(id, "eyJ") {
+		return false
+	}
+	parts := strings.Split(id, ".")
+	if len(parts) != 3 || parts[1] == "" {
+		return false
+	}
+	for _, p := range parts {
+		for i := range len(p) {
+			if c := p[i]; !isBase64URL(c) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// isBase64URL reports whether c belongs to the unpadded base64url alphabet.
+func isBase64URL(c byte) bool {
+	return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '-' || c == '_'
 }
 
 // stepFailed ends the connector after a Login or List error. An error

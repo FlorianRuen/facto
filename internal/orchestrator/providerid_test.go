@@ -29,7 +29,6 @@ func TestRun_RefusesUnsafeProviderID(t *testing.T) {
 		{"invalid utf-8", "FA\xff0001"},
 		{"replacement char", "FA\ufffd0001"},
 		{"too long", strings.Repeat("a", 129)},
-		{"token-like run", "SyntheticTokenAbCdEfGh1234"},
 		{"jwt", "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ4In0."},
 	}
 	for _, tt := range tests {
@@ -67,7 +66,12 @@ func TestRun_RefusesUnsafeProviderID(t *testing.T) {
 
 func TestRun_AcceptsPlainProviderID(t *testing.T) {
 	t.Parallel()
-	for _, id := range []string{"a1", "10234567", "FA-2026-0001", "avis_2026.01", "facture-ÉDF-12", strings.Repeat("a", 128)} {
+	for _, id := range []string{
+		"a1", "10234567", "FA-2026-0001", "avis_2026.01", "facture-ÉDF-12", strings.Repeat("a", 128),
+		"SyntheticTokenAbCdEfGh1234", // was the "token-like run" refusal row
+		"FACTURE2026000123", "FR2026041234567A", "A1B2C3D4E5F6A7B8",
+		"WECASA-ORD-AbCdEfGhIjKlMnOp", "in_1MtHbELkdIwHu7ixl4OzzPMv",
+	} {
 		t.Run(id, func(t *testing.T) {
 			t.Parallel()
 			r := newRunRig(t, nil)
