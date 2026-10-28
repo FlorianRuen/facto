@@ -33,14 +33,27 @@ var publicSuffixes = map[string]struct{}{
 	"com.sg": {}, "com.hk": {}, "com.tw": {}, "com.ar": {}, "co.il": {},
 }
 
+// sharedHostingSuffixes are private suffixes under which unrelated tenants
+// get sibling subdomains: allowing one of them, exact or after "*.", would
+// allow every tenant. One tenant's host ("myproject.github.io") or a
+// wildcard below it ("*.myproject.github.io") stays valid.
+var sharedHostingSuffixes = map[string]struct{}{
+	"github.io": {}, "pages.dev": {}, "netlify.app": {}, "vercel.app": {},
+	"herokuapp.com": {}, "appspot.com": {}, "blogspot.com": {},
+	"cloudfront.net": {}, "amazonaws.com": {}, "azurewebsites.net": {},
+	"web.app": {}, "firebaseapp.com": {},
+}
+
 // ParseAllowlist accepts one or more patterns, each either a bare host
 // ("api.example.com") or "*." followed by a bare host. Refused (wraps
 // ErrInvalidAllowlist): empty list, empty entry, scheme, path, port,
 // userinfo, query, fragment, backslash, whitespace or control character,
 // non-ASCII byte, any other "*", leading or trailing ".", "..", and, exact
 // or after "*.", a single-label host ("com", "*.fr", "localhost") or a
-// built-in multi-label public suffix ("co.uk", "*.gouv.fr"), compared
-// case-insensitively. "*.example.co.uk" and "*.impots.gouv.fr" stay valid.
+// built-in multi-label public suffix ("co.uk", "*.gouv.fr") or shared-hosting
+// suffix ("github.io", "*.netlify.app", "*.amazonaws.com"…), compared
+// case-insensitively. "*.example.co.uk", "*.impots.gouv.fr",
+// "myproject.github.io" and "*.myproject.github.io" stay valid.
 // This is the single source of truth for connector.Info.AllowedDomains.
 func ParseAllowlist(patterns []string) (Allowlist, error) {
 	if len(patterns) == 0 {
@@ -55,6 +68,9 @@ func ParseAllowlist(patterns []string) (Allowlist, error) {
 		host = strings.ToLower(host)
 		if _, ps := publicSuffixes[host]; ps || !strings.Contains(host, ".") {
 			return Allowlist{}, fmt.Errorf("%w: entry %q is a public suffix", ErrInvalidAllowlist, p)
+		}
+		if _, sh := sharedHostingSuffixes[host]; sh {
+			return Allowlist{}, fmt.Errorf("%w: entry %q is a shared-hosting suffix", ErrInvalidAllowlist, p)
 		}
 		if wildcard {
 			a.suffixes = append(a.suffixes, "."+host)

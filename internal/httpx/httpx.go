@@ -166,8 +166,10 @@ func (c *Client) Get(ctx context.Context, rawURL string) (*http.Response, error)
 // redirect hop, a scheme other than https wraps ErrInsecureScheme and a host
 // (URL host or explicit req.Host) outside the allowlist, or with a port
 // other than 443, wraps ErrDomainNotAllowed. On such an early rejection, as
-// on a nil URL, req.Body is closed like net/http.Client.Do does. Following more than MaxRedirects redirects is an
-// error. Errors keep their cause chain and name the host, but no error in
+// on a nil URL, req.Body is closed like net/http.Client.Do does; a hop the
+// guard rejects later (a 307/308 redirect replaying the body through
+// req.GetBody) has its body closed exactly once too. Following more than
+// MaxRedirects redirects is an error. Errors keep their cause chain and name the host, but no error in
 // the chain contains a query string, fragment, userinfo or header value. The
 // timeout covers reading the body: close it to release the request.
 func (c *Client) Do(req *http.Request) (*http.Response, error) {
@@ -230,6 +232,10 @@ func (g guard) RoundTrip(req *http.Request) (*http.Response, error) {
 		h.add(req)
 	}
 	if err := g.c.check(req); err != nil {
+		// The RoundTripper contract: always close the body, even on error.
+		// On a 307/308 redirect this is the body net/http replayed through
+		// req.GetBody, which nobody else closes.
+		closeBody(req)
 		return nil, err
 	}
 	resp, err := g.next.RoundTrip(req)
