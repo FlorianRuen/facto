@@ -7,9 +7,13 @@ import (
 	"io"
 	"log/slog"
 	"mime"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/FlorianRuen/facto/internal/connector"
 	"github.com/FlorianRuen/facto/internal/httpx"
+	"github.com/FlorianRuen/facto/internal/logx"
 	"github.com/FlorianRuen/facto/internal/normalize"
 )
 
@@ -72,7 +76,10 @@ var errNilSource = errors.New("orchestrator: nil connector source")
 // order. Per connector: connector.ValidateInfo (failure: broken, never
 // logged in); Env{HTTP: Deps.NewHTTP(Info.AllowedDomains) (error: broken,
 // never logged in), Log: the redacting logger tagged connector=<id>}; Login;
-// List(session, p); then for each listed ref: normalize.BeforeFetch (a known
+// List(session, p); then for each listed ref: a ProviderID validProviderID
+// refuses (a URL, a query, a token, whitespace or control characters, over
+// 128 bytes) is StatusInvalid, with no ProviderID, never fetched, indexed,
+// named or logged; otherwise normalize.BeforeFetch (a known
 // ProviderID is StatusSkippedKnownID and never fetched, a lookup error
 // StatusFailed), Fetch, Ingest, close the body.
 //
@@ -249,6 +256,15 @@ func (o *Orchestrator) runSteps(ctx context.Context, c connector.Connector, p co
 // fetchOne handles one listed ref and appends its DocResult. It returns
 // false when the connector must stop (sentinel error or cancellation).
 func (o *Orchestrator) fetchOne(ctx context.Context, c connector.Connector, sess connector.Session, info connector.Info, provider string, ref connector.DocumentRef, cr *connRun) bool {
+	if !validProviderID(ref.ProviderID) {
+		// The id may be a signed link or a token: it never reaches the
+		// report, the index, the file name or the log.
+		cr.res.Documents = append(cr.res.Documents, DocResult{Source: info.ID, Provider: provider, Status: StatusInvalid})
+		cr.log.LogAttrs(ctx, slog.LevelWarn, "document not filed: provider id refused (value withheld)",
+			slog.String("phase", cr.phase),
+			slog.String("status", string(StatusInvalid)))
+		return true
+	}
 	base := DocResult{Source: info.ID, Provider: provider, ProviderID: ref.ProviderID}
 
 	dec, err := normalize.BeforeFetch(ctx, o.idx, provider, ref)
@@ -325,6 +341,31 @@ func (o *Orchestrator) fetchOne(ctx context.Context, c connector.Connector, sess
 	_ = rc.Close()
 	cr.phase = phaseList
 	return ctx.Err() == nil
+}
+
+// maxProviderIDLen bounds a DocumentRef.ProviderID: supplier invoice
+// numbers and ids are short, a longer value is a link or a blob.
+const maxProviderIDLen = 128
+
+// validProviderID reports whether id may be reported, indexed and used in a
+// file name. The empty id (no dedup key) is valid. An id is refused when it
+// is longer than maxProviderIDLen bytes, is not valid UTF-8, holds "://",
+// "?" or "=" (a URL or a query: a buggy connector using the download link as
+// the id), a whitespace, control or other non-printable character, or
+// anything logx.Clean would mask (a token).
+func validProviderID(id string) bool {
+	if len(id) > maxProviderIDLen || !utf8.ValidString(id) {
+		return false
+	}
+	if strings.Contains(id, "://") || strings.ContainsAny(id, "?=") {
+		return false
+	}
+	for _, r := range id {
+		if unicode.IsSpace(r) || !unicode.IsPrint(r) || r == utf8.RuneError {
+			return false
+		}
+	}
+	return logx.Clean(id) == id
 }
 
 // stepFailed ends the connector after a Login or List error. An error

@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/FlorianRuen/facto/internal/fsx"
+	"github.com/FlorianRuen/facto/internal/logx"
 )
 
 // Status is the outcome of one document.
@@ -75,6 +76,17 @@ func (r *Report) AddRun(res RunResult) {
 	}
 }
 
+// cleaned returns d with the supplier- or file-provided strings (Origin,
+// ProviderID, Path) passed through logx.Clean: a report never carries a
+// token, a URL query or userinfo, even from a source the connector loop does
+// not validate.
+func (d DocResult) cleaned() DocResult {
+	d.Origin = logx.Clean(d.Origin)
+	d.ProviderID = logx.Clean(d.ProviderID)
+	d.Path = logx.Clean(d.Path)
+	return d
+}
+
 // reportVersion is the JSON report format version.
 const reportVersion = 1
 
@@ -120,6 +132,7 @@ func (r Report) counts() map[Status]int {
 
 // JSON renders the report: 2-space indent, times in UTC RFC 3339, "counts"
 // holds only non-zero statuses, empty lists are [], trailing newline.
+// Origin, ProviderID and paths go through logx.Clean.
 func (r Report) JSON() ([]byte, error) {
 	out := jsonReport{
 		ReportVersion: reportVersion,
@@ -133,9 +146,10 @@ func (r Report) JSON() ([]byte, error) {
 		out.Connectors = append(out.Connectors, jsonConn(c))
 	}
 	for _, d := range r.Documents {
-		out.Documents = append(out.Documents, jsonDoc(d))
+		out.Documents = append(out.Documents, jsonDoc(d.cleaned()))
 	}
 	for _, w := range r.Warnings {
+		w.Path = logx.Clean(w.Path)
 		out.Warnings = append(out.Warnings, jsonWarning(w))
 	}
 	var buf bytes.Buffer
@@ -149,7 +163,8 @@ func (r Report) JSON() ([]byte, error) {
 
 // Text renders the human summary: one line per document and per warning, no
 // control or format character other than the '\n' line ends (untrusted file
-// names are escaped).
+// names are escaped). Origin, ProviderID and paths go through logx.Clean
+// first.
 func (r Report) Text() string {
 	var b strings.Builder
 	b.WriteString("facto report\n")
@@ -182,6 +197,7 @@ func (r Report) Text() string {
 	if len(r.Documents) > 0 {
 		b.WriteString("\ndocuments:\n")
 		for _, d := range r.Documents {
+			d = d.cleaned()
 			fields := []string{string(d.Status), d.Source}
 			switch {
 			case d.Origin != "":
@@ -199,7 +215,7 @@ func (r Report) Text() string {
 	if len(r.Warnings) > 0 {
 		b.WriteString("\nwarnings:\n")
 		for _, w := range r.Warnings {
-			b.WriteString("- " + escapeJoin([]string{w.Reason, w.Source, w.Path}) + "\n")
+			b.WriteString("- " + escapeJoin([]string{w.Reason, w.Source, logx.Clean(w.Path)}) + "\n")
 		}
 	}
 	return b.String()
