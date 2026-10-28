@@ -45,7 +45,9 @@ func loadMigrations(fsys fs.FS, dir string) ([]migration, error) {
 }
 
 // Migrate applies the embedded migrations not yet applied, in one
-// transaction. Idempotent.
+// transaction. Idempotent. A database whose recorded schema version is
+// higher than the newest embedded migration is left untouched and the error
+// wraps ErrSchemaTooNew.
 func (s *Store) Migrate(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("store migrate: %w", err)
@@ -81,6 +83,14 @@ func (s *Store) migrate(ctx context.Context, migs []migration) (err error) {
 	var current sql.NullInt64
 	if err := tx.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&current); err != nil {
 		return fmt.Errorf("read schema version: %w", err)
+	}
+	newest := 0
+	if len(migs) > 0 {
+		newest = migs[len(migs)-1].version
+	}
+	if current.Int64 > int64(newest) {
+		// Nothing applied: the deferred rollback leaves the database as is.
+		return fmt.Errorf("%w: version %d, newest known %d", ErrSchemaTooNew, current.Int64, newest)
 	}
 	for _, m := range migs {
 		if int64(m.version) <= current.Int64 {

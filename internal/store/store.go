@@ -42,6 +42,10 @@ var (
 	ErrDuplicate = errors.New("store: duplicate document")
 	// ErrInvalidDocument reports an Insert input that fails validation.
 	ErrInvalidDocument = errors.New("store: invalid document")
+	// ErrSchemaTooNew reports a database whose recorded schema version is
+	// higher than the newest embedded migration: it was written by a newer
+	// facto, and this binary must not read or write it.
+	ErrSchemaTooNew = errors.New("store: database schema is newer than this binary")
 
 	errClosed = errors.New("store: already closed")
 )
