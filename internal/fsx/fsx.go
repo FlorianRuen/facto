@@ -17,7 +17,9 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
+	"syscall"
 )
 
 const (
@@ -127,8 +129,11 @@ func (r *Root) WriteAtomicFrom(ctx context.Context, name string, src io.Reader) 
 // temp file is left behind and name is not created. If fsyncing the parent
 // directory failed after the link, the error wraps ErrNotDurable: name already
 // holds the new content. The parent directory must exist (fs.ErrNotExist
-// otherwise). The filesystem must support hard links: any other link failure
-// wraps ErrLinkUnsupported (see ProbeLink to check at startup).
+// otherwise). The filesystem must support hard links: a link failure wraps
+// ErrLinkUnsupported (see ProbeLink to check at startup) unless it plainly
+// means something else (full disk, quota, access denied, read-only, missing
+// path, I/O error, name too long, canceled context; see linkUnsupported), in
+// which case the original error is kept.
 func (r *Root) WriteNew(ctx context.Context, name string, src io.Reader) error {
 	osName, err := cleanName(name)
 	if err != nil {
@@ -145,14 +150,17 @@ func (r *Root) WriteNew(ctx context.Context, name string, src io.Reader) error {
 }
 
 // link publishes tmp as osName without replacing anything, then removes tmp.
-// A link error other than fs.ErrExist means the filesystem cannot hard-link:
-// it wraps ErrLinkUnsupported and names the target directory.
+// fs.ErrExist is reported as is; any other link error names the target
+// directory and wraps ErrLinkUnsupported when linkUnsupported says so.
 func (r *Root) link(tmp, osName string) error {
 	if err := linkFunc(r.root, tmp, osName); err != nil {
 		if errors.Is(err, fs.ErrExist) {
 			return fmt.Errorf("link: %w", err)
 		}
 		dir := filepath.ToSlash(filepath.Dir(osName))
+		if !linkUnsupported(err) {
+			return fmt.Errorf("link in %q: %w", dir, err)
+		}
 		return fmt.Errorf("link in %q: %w: %w", dir, ErrLinkUnsupported, err)
 	}
 	if err := r.root.Remove(tmp); err != nil {
@@ -164,8 +172,9 @@ func (r *Root) link(tmp, osName string) error {
 // ProbeLink checks that the root directory supports hard links, which
 // WriteNew needs: it creates a 0600 temp file in the root, hard-links it to a
 // second temp name, then removes both. On success the directory is left as
-// it was. When the link fails the error wraps ErrLinkUnsupported and names
-// the root directory; no temp file is left behind.
+// it was. When the link fails the error names the root directory and wraps
+// ErrLinkUnsupported, unless linkUnsupported says the failure means something
+// else (then the original error is kept); no temp file is left behind.
 func (r *Root) ProbeLink(ctx context.Context) (err error) {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("fsx probe link: %w", err)
@@ -187,9 +196,29 @@ func (r *Root) ProbeLink(ctx context.Context) (err error) {
 		return fmt.Errorf("fsx probe link in %q: close temp: %w", r.root.Name(), err)
 	}
 	if err := linkFunc(r.root, src, dst); err != nil {
+		if !linkUnsupported(err) {
+			return fmt.Errorf("fsx probe link in %q: %w", r.root.Name(), err)
+		}
 		return fmt.Errorf("fsx probe link in %q: %w: %w", r.root.Name(), ErrLinkUnsupported, err)
 	}
 	return nil
+}
+
+// linkUnsupported reports whether a hard-link error means the filesystem
+// cannot hard-link. It is a denylist: a canceled or expired context, or an
+// errno in linkKeepErrnos (disk full, quota, access denied, read-only...),
+// means something else; every other error, EPERM included (FAT returns it),
+// counts as missing hard-link support. Errnos are compared through
+// syscall.Errno, not fs.ErrPermission, which would also match EPERM.
+func linkUnsupported(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var errno syscall.Errno
+	if errors.As(err, &errno) && slices.Contains(linkKeepErrnos, errno) {
+		return false
+	}
+	return true
 }
 
 // rename publishes tmp as osName, replacing whatever was there.
