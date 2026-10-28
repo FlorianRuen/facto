@@ -18,13 +18,17 @@ const MaxNameLen = 200
 // truncates a name.
 const maxExtLen = 10
 
-// windowsReserved lists the device names Windows refuses as a file stem.
+// windowsReserved lists the device names Windows refuses as a file stem
+// (upper case). Go's internal/filepathlite isReservedName is the reference;
+// COM0 and LPT0 are added defensively.
 var windowsReserved = map[string]struct{}{
-	"CON": {}, "PRN": {}, "AUX": {}, "NUL": {},
-	"COM1": {}, "COM2": {}, "COM3": {}, "COM4": {}, "COM5": {},
+	"CON": {}, "PRN": {}, "AUX": {}, "NUL": {}, "CONIN$": {}, "CONOUT$": {},
+	"COM0": {}, "COM1": {}, "COM2": {}, "COM3": {}, "COM4": {}, "COM5": {},
 	"COM6": {}, "COM7": {}, "COM8": {}, "COM9": {},
-	"LPT1": {}, "LPT2": {}, "LPT3": {}, "LPT4": {}, "LPT5": {},
+	"COM\u00b9": {}, "COM\u00b2": {}, "COM\u00b3": {},
+	"LPT0": {}, "LPT1": {}, "LPT2": {}, "LPT3": {}, "LPT4": {}, "LPT5": {},
 	"LPT6": {}, "LPT7": {}, "LPT8": {}, "LPT9": {},
+	"LPT\u00b9": {}, "LPT\u00b2": {}, "LPT\u00b3": {},
 }
 
 // SafeName turns any string (supplier-provided invoice number, seller name,
@@ -38,12 +42,14 @@ var windowsReserved = map[string]struct{}{
 //  2. runs of dots are collapsed to one dot (so ".." never appears);
 //  3. leading and trailing dots and spaces are trimmed (no hidden files, no
 //     Windows trailing dot/space);
-//  4. if the stem (text before the first dot), compared case-insensitively, is
-//     a Windows reserved device name (CON, PRN, AUX, NUL, COM1–COM9,
-//     LPT1–LPT9) the result is prefixed with '_';
+//  4. if the stem (text before the first dot, trailing spaces ignored as
+//     Windows does), compared case-insensitively, is a Windows reserved device
+//     name (CON, PRN, AUX, NUL, CONIN$, CONOUT$, COM0–COM9, COM¹–COM³,
+//     LPT0–LPT9, LPT¹–LPT³) the result is prefixed with '_';
 //  5. the result is truncated to at most MaxNameLen bytes on a rune boundary,
 //     keeping the extension (from the last dot, up to 10 bytes) when there is
-//     one, then steps 2 and 3 are applied again;
+//     one, then steps 2 and 3 are applied again, and step 4 again when the
+//     truncation exposed a reserved stem;
 //  6. an empty result becomes "_".
 //
 // SafeName is idempotent. Other Unicode (accents, CJK) is kept as is:
@@ -55,6 +61,14 @@ func SafeName(s string) string {
 	}
 	if len(s) > MaxNameLen {
 		s = trimDotsSpaces(collapseDots(truncate(s)))
+		// Truncation can expose a reserved stem ("CON" + spaces + tail). The
+		// prefixed result starts with '_', so truncating it again is safe.
+		if isReserved(s) {
+			s = "_" + s
+			if len(s) > MaxNameLen {
+				s = trimDotsSpaces(collapseDots(truncate(s)))
+			}
+		}
 	}
 	if s == "" {
 		return "_"
@@ -106,6 +120,7 @@ func trimDotsSpaces(s string) string { return strings.Trim(s, ". ") }
 // isReserved is the step 4 test.
 func isReserved(s string) bool {
 	stem, _, _ := strings.Cut(s, ".")
+	stem = strings.TrimRight(stem, " ")
 	_, ok := windowsReserved[strings.ToUpper(stem)]
 	return ok
 }
