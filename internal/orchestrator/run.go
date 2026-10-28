@@ -83,8 +83,9 @@ var errNilSource = errors.New("orchestrator: nil connector source")
 // the body it returned) is recovered: the connector is broken, the panic
 // value is never logged or reported, and the next connector runs. A body
 // whose Read panics inside Ingest is still closed (a panicking Close is
-// recovered too). A connector that panics before reporting an id (nil, or
-// Info panics) is labelled by its position in src.All(): "connector[<i>]".
+// recovered too). A connector without a valid id (nil, Info panics, or
+// ValidateInfo refuses its Info) is labelled by its position in src.All():
+// "connector[<i>]"; the refused id never reaches the result.
 //
 // Only panics on the goroutine running Run can be recovered: a panic in a
 // goroutine a connector starts itself crashes the whole process. Connectors
@@ -199,12 +200,15 @@ func closeGuarded(b io.Closer) (panicked bool) {
 // so that a panic leaves an accurate partial result.
 func (o *Orchestrator) runSteps(ctx context.Context, c connector.Connector, p connector.Period, cr *connRun) {
 	info := c.Info()
-	cr.res.ID = info.ID
-	cr.log = o.log.With(slog.String("connector", info.ID))
+	// An id ValidateInfo refuses may be anything (a token a buggy
+	// connector returned): the connector keeps its positional label in
+	// the result and the log until its Info is valid.
 	if err := connector.ValidateInfo(info); err != nil {
 		o.fail(ctx, cr, StateBroken, err)
 		return
 	}
+	cr.res.ID = info.ID
+	cr.log = o.log.With(slog.String("connector", info.ID))
 
 	cr.phase = phaseHTTP
 	client, err := o.newHTTP(info.AllowedDomains)
