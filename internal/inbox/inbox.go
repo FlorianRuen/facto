@@ -38,6 +38,11 @@ const MaxFileSize = facturx.MaxPDFSize
 // one (other content, other size, or no longer a regular file).
 var ErrChanged = errors.New("inbox: file changed since scan")
 
+// doneRecheckHook runs in Done between the content verification and the
+// identity recheck. No-op in production; internal tests replace it to rename
+// another file over the item in that window.
+var doneRecheckHook = func() {}
+
 // Prompter is the consumer-side view of connector.Prompter used in
 // interactive mode. file is the item path (slash-separated, relative to the
 // inbox); guess holds what was inferred so far (Ext set, Kind set,
@@ -179,6 +184,14 @@ func (ib *Inbox) Open(ctx context.Context, it Item) (io.ReadCloser, error) {
 // the scanned regular file (else ErrChanged, nothing removed). Missing: wraps
 // fs.ErrNotExist. Never removes a subfolder. Paths that are not local are
 // refused.
+//
+// After the content check, Done re-Lstats name and compares it with the
+// verified file (os.SameFile), so a file renamed over the item after the read
+// is kept (ErrChanged). A window remains between that recheck and the
+// Remove: a rename landing exactly there is removed in place of the verified
+// file. Closing it needs a remove-if-same-inode primitive that os.Root does
+// not offer; the window is a few syscalls wide and needs a concurrent writer
+// in the inbox at that instant.
 func (ib *Inbox) Done(ctx context.Context, it Item) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("inbox done: %w", err)
@@ -197,6 +210,7 @@ func (ib *Inbox) Done(ctx context.Context, it Item) error {
 		}
 		// The entry at name must still be the file just verified: a rename
 		// over it after the read would otherwise lose the newer drop.
+		doneRecheckHook()
 		li, err := dir.Lstat(name)
 		if err != nil {
 			return fmt.Errorf("recheck: %w", err)

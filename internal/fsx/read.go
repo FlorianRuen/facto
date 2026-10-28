@@ -19,6 +19,14 @@ var (
 	ErrNotDir = errors.New("fsx: not a directory")
 )
 
+// openDirHook and openRegularHook run between the Lstat and the open in
+// OpenDir and OpenRegular. No-ops in production; internal tests replace them
+// to swap the entry in that window and prove the identity checks fire.
+var (
+	openDirHook     = func() {}
+	openRegularHook = func() {}
+)
+
 // ReadDir lists the root directory itself, sorted by name. Entry types come
 // from the directory listing without following anything: a symlink is
 // reported as a symlink (fs.ModeSymlink), whatever it points to.
@@ -57,6 +65,7 @@ func (r *Root) OpenDir(name string) (*Root, error) {
 	if !li.IsDir() {
 		return nil, fmt.Errorf("fsx open dir %q: mode %v: %w", name, li.Mode().Type(), ErrNotDir)
 	}
+	openDirHook()
 	sub, err := r.root.OpenRoot(osName)
 	if err != nil {
 		return nil, fmt.Errorf("fsx open dir %q: %w", name, err)
@@ -91,6 +100,7 @@ func (r *Root) OpenRegular(name string) (*os.File, error) {
 	if !li.Mode().IsRegular() {
 		return nil, fmt.Errorf("fsx open %q: mode %v: %w", name, li.Mode().Type(), ErrNotRegular)
 	}
+	openRegularHook()
 	f, err := r.root.OpenFile(osName, os.O_RDONLY|nonBlock, 0)
 	if err != nil {
 		return nil, fmt.Errorf("fsx open %q: %w", name, err)
