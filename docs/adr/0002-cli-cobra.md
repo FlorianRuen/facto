@@ -18,7 +18,8 @@ Commands are built by a constructor that takes the injected I/O; `SilenceUsage` 
 
 Build graph added (CGO_ENABLED=0, measured with `go list -deps`):
 `github.com/spf13/pflag` v1.0.9 on all OSes, `github.com/inconshreveable/mousetrap`
-v1.1.0 on Windows only.
+v1.1.0 on Windows only. Minimal version selection resolves pflag to **v1.0.10** in this
+module because `github.com/pdfcpu/pdfcpu` v0.16.4 (ADR 0006) already requires it (T25).
 
 ## Alternatives
 | Option | Why not |
