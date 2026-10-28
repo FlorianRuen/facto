@@ -1,0 +1,17 @@
+output.local = "$HOME/Factures"
+output.gdrive.enabled = false
+output.gdrive.root = "Invoices"
+naming.file = "{date:2006-01-02}_{provider}_{kind}[_{amount}][_{ref}]"
+naming.dir = "{year}/{category}/{provider}"
+naming.language = "fr"
+secrets.default = "bitwarden"
+sessions = "ephemeral"
+state_dir = "$HOME/facto-state"
+notify = "desktop"
+connectors.count = 1
+connectors.fakeprovider.enabled = true
+connectors.fakeprovider.category = "services"
+connectors.fakeprovider.login = "keyring://facto/fakeprovider/login"
+connectors.fakeprovider.password = "keyring://facto/fakeprovider/password"
+connectors.fakeprovider.otp = ""
+manual.count = 0
