@@ -1,7 +1,6 @@
 package connector
 
 import (
-	"cmp"
 	"fmt"
 	"regexp"
 	"slices"
@@ -20,6 +19,7 @@ var idRe = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 type Registry struct {
 	mu    sync.RWMutex
 	byID  map[string]Connector
+	ids   []string    // sorted; ids[i] is the ID of order[i]
 	order []Connector // sorted by ID
 }
 
@@ -45,9 +45,10 @@ func (r *Registry) Register(c Connector) error {
 		return fmt.Errorf("%w: %q", ErrDuplicateID, info.ID)
 	}
 	r.byID[info.ID] = c
-	i, _ := slices.BinarySearchFunc(r.order, info.ID, func(e Connector, id string) int {
-		return cmp.Compare(e.Info().ID, id)
-	})
+	// Search the cached IDs: calling a connector's Info() while holding the
+	// lock would run third-party code inside the critical section.
+	i, _ := slices.BinarySearch(r.ids, info.ID)
+	r.ids = slices.Insert(r.ids, i, info.ID)
 	r.order = slices.Insert(r.order, i, c)
 	return nil
 }

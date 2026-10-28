@@ -59,6 +59,9 @@ type Connector interface {
 type Session any
 
 // Info is a connector's static metadata.
+//
+// TODO(T13): docs/spec.md lists "config fields" in a connector's static
+// metadata; define them together with internal/config.
 type Info struct {
 	// ID matches ^[a-z0-9]+(-[a-z0-9]+)*$, at most 40 bytes. It is used in
 	// paths (sessions/<id>.age).
