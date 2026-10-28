@@ -1,0 +1,9 @@
+{
+  "profile": "basic",
+  "type_code": "380",
+  "number": "FA-2026-0002",
+  "issue_date": "2026-04-01",
+  "seller_name": "Fournisseur Exemple SAS",
+  "currency": "CHF",
+  "grand_total_cents": 123450
+}
