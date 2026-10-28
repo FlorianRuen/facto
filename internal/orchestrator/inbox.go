@@ -27,9 +27,11 @@ type InboxResult struct {
 // Origin = item path, ProviderID = item.Doc.Ref). An item is Done (removed)
 // only after StatusFiled (Put AND Insert succeeded) or
 // StatusSkippedDuplicate; every other status leaves the file. A Done failure
-// keeps the document's status and adds a ReasonNotRemoved warning. A
+// keeps the document's status and adds a ReasonNotRemoved warning. An item
+// that changed since the scan (at Open or while read) is StatusChanged. A
 // per-item failure does not stop the loop; a canceled ctx does (the error
-// wraps ctx.Err()). Scan warnings are reported with Source "inbox".
+// wraps ctx.Err()); an item filed as ctx is canceled is kept, not removed.
+// Scan warnings are reported with Source "inbox".
 func (o *Orchestrator) IngestInbox(ctx context.Context, src InboxSource) (InboxResult, error) {
 	var out InboxResult
 	if err := ctx.Err(); err != nil {
@@ -85,7 +87,16 @@ func (o *Orchestrator) ingestItem(ctx context.Context, src InboxSource, it inbox
 	res, ierr := o.Ingest(ctx, in)
 	// Ingest has read everything it needs; a close error changes nothing.
 	_ = rc.Close()
+	if ierr != nil && res.Status == StatusFailed && errors.Is(ierr, inbox.ErrChanged) {
+		// The file changed while it was being read: same as at Open.
+		res.Status = StatusChanged
+	}
 	if ierr != nil || (res.Status != StatusFiled && res.Status != StatusSkippedDuplicate) {
+		return res, nil
+	}
+	if ctx.Err() != nil {
+		// Canceled after filing: keep the inbox file; the next run sees it
+		// as a duplicate and removes it then.
 		return res, nil
 	}
 	if err := src.Done(ctx, it); err != nil {

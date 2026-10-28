@@ -35,7 +35,8 @@ type Input struct {
 // Ingest reads Content (at most MaxSize bytes, else ErrTooLarge), hashes it,
 // applies normalize.Decide with provider = normalize.Slug(Doc.Provider),
 // renders the path with Doc.Version set to the decided version, Puts it, then
-// Inserts the index row. The DocResult status is always set; the error is nil
+// Inserts the index row (even if ctx is canceled once the Put succeeded,
+// so a stored file is never left unindexed). The DocResult status is always set; the error is nil
 // only for StatusFiled and StatusSkippedDuplicate. A document is validated
 // (non-empty provider slug, renderable) before anything is written. No error
 // text, file content or secret ever lands in a DocResult; failures are logged
@@ -159,7 +160,10 @@ func (o *Orchestrator) file(ctx context.Context, in Input, doc normalize.Doc, p 
 	} else {
 		row.DriveID = id
 	}
-	if _, err := o.idx.Insert(ctx, row); err != nil {
+	// The file is stored: a cancellation must not abandon its index row, or
+	// the unindexed file would clash (ErrExists) on every later run. The
+	// insert is a bounded local write, so it runs without ctx's cancellation.
+	if _, err := o.idx.Insert(context.WithoutCancel(ctx), row); err != nil {
 		o.log.LogAttrs(ctx, slog.LevelError, "document stored but not indexed: the destination file exists unindexed and will clash on the next run",
 			slog.String("source", res.Source),
 			slog.String("provider", res.Provider),

@@ -814,15 +814,30 @@ func TestIngestInbox_ContextCanceled(t *testing.T) {
 		src := newFakeInbox(r.ev, items(), contents)
 		ctx, cancel := context.WithCancel(t.Context())
 		r.dst.after = cancel // canceled right after the first Put
-		_, err := r.o.IngestInbox(ctx, src)
+		res, err := r.o.IngestInbox(ctx, src)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("IngestInbox() error = %v, want context.Canceled", err)
 		}
 		if got := src.openedList(); !slices.Equal(got, []string{"a.pdf"}) {
 			t.Fatalf("opened = %q, want the loop to stop after a.pdf", got)
 		}
+		// The Put of a.pdf succeeded: its index row must be written anyway,
+		// or the stored file would clash (ErrExists) on every later run.
+		if got := r.ev.withPrefix("insert:"); !slices.Equal(got, []string{"insert:edf/ref-a/v1"}) {
+			t.Fatalf("inserts = %q, want a.pdf indexed after its Put", got)
+		}
+		if len(res.Documents) != 1 || res.Documents[0].Status != orchestrator.StatusFiled || res.Documents[0].Path == "" {
+			t.Fatalf("documents = %+v, want a.pdf filed with its path", res.Documents)
+		}
+		docs := r.idx.all()
+		if len(docs) != 1 || docs[0].ProviderID != "ref-a" || docs[0].LocalPath != res.Documents[0].Path {
+			t.Fatalf("index = %+v, want a.pdf recorded at %q", docs, res.Documents[0].Path)
+		}
 		if d := src.doneList(); len(d) != 0 {
-			t.Fatalf("Done = %q, want nothing removed (insert did not succeed)", d)
+			t.Fatalf("Done = %q, want nothing removed after cancellation", d)
+		}
+		if len(res.Warnings) != 0 {
+			t.Fatalf("warnings = %+v, want none (removal skipped, not failed)", res.Warnings)
 		}
 	})
 }
