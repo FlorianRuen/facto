@@ -586,7 +586,7 @@ notify: desktop             # desktop, none
 | `facto schedule monthly \| off` | Install or remove the scheduled task |
 | `facto record <url>` | Record a cleaned HAR to write a connector |
 
-Exit codes: `0` all ok, `1` at least one connector in `needs_login`, `broken`, `auth_failed`, `rate_limited` or `interrupted` (or the run itself failed or was canceled), `2` configuration error. Useful for scripts.
+Exit codes: `0` all ok, `1` at least one connector in `needs_login`, `broken`, `auth_failed`, `rate_limited` or `interrupted` (or the run itself failed or was canceled), `2` configuration or usage error (invalid `config.yaml`, unknown command or flag). Useful for scripts.
 
 **Scheduling per OS.**
 

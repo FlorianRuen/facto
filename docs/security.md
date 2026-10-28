@@ -22,10 +22,10 @@ websites themselves.
 | Cookie theft through the automated browser (CDP port) | CDP over a pipe, else random 127.0.0.1 port, short browser life | Not started (J1) |
 | Reading the Chromium profile | Disposable 0700 profile, deleted after login | Not started (J1) |
 | Reading persisted sessions | AEAD-encrypted sessions, key in keyring or password manager; `sessions: ephemeral` | Not started (J1, `internal/vault`) |
-| Leak through sync | Refuse a state dir inside the output folder or a synced folder | Done in `internal/config` (ADR 0007, D1); name-based, see limitations |
-| Leak in logs, reports, errors | `Secret` type, redaction by key and pattern, no HTTP bodies logged | Done: redacting logger, clean reports, `secret.Secret` (`internal/secret`) |
-| Leak through the command line | No secret in argv; subprocess-only environment | Done in `internal/secret/bitwarden`; CLI wiring pending |
-| Leak through a memory dump | `RLIMIT_CORE=0`, `PR_SET_DUMPABLE=0` on Linux | Done in `internal/proc`; wired with the CLI |
+| Leak through sync | Refuse a state dir inside the output folder or a synced folder | Done: `internal/config` (ADR 0007, D1, lexical) and `cmd/facto` (output folder, symlinks followed); synced-folder detection is name-based, see limitations |
+| Leak in logs, reports, errors | `Secret` type, redaction by key and pattern, no HTTP bodies logged | Done: redacting logger, clean reports, `secret.Secret` (`internal/secret`), config errors never echo values |
+| Leak through the command line | No secret in argv; subprocess-only environment | Done in `internal/secret/bitwarden`; no CLI flag takes a secret. The resolver is not called by `collect` yet (J1) |
+| Leak through a memory dump | `RLIMIT_CORE=0`, `PR_SET_DUMPABLE=0` on Linux | Done in `internal/proc`, called first by the CLI on every run; Linux only |
 | Leak through a bug report | Redaction, CI canary scan, clean `--report` | Canary scan (`make leakcheck`) and clean report done |
 | Exfiltration by a connector | Per-connector domain allowlist in the HTTP client | Done in `internal/httpx` and `internal/orchestrator` |
 | Compromised dependency | Minimal deps, scanners, pinned tools, signed releases | Scanners and pinned tools done (`make audit`, ADR 0001); releases J4 |
@@ -96,7 +96,9 @@ from one allowlist.
   accepted: they look like tokens to the log patterns but are real invoice
   numbers. The empty id (no dedup key) is valid.
 - Exit codes (`orchestrator.ExitCode`): `0` all ok or no connector, `1` any
-  connector not ok or a failed or canceled run, `2` configuration error.
+  connector not ok or a failed or canceled run, `2` configuration error. The
+  CLI also exits `2` on a usage error (unknown command or flag, invalid
+  `--year`).
 
 ### Redacting logger (`internal/logx`)
 
@@ -290,19 +292,27 @@ Files dropped in `inbox/` are untrusted input.
 - **64 KiB cap**, checked before decoding and again while reading.
 - **Strict decoding.** Unknown keys, duplicate keys, wrong types and a second
   YAML document are errors (exit code `2`).
+- **Bounded error list.** At most 20 type errors are reported for one
+  document, followed by `and N more`. A file of thousands of wrongly typed
+  items gives a short message, in bounded time.
 - **Secret fields hold references.** `login`, `password` and `otp` must be empty
   or a valid reference. A plaintext value is refused with a fixed message.
 - **No-echo policy.** Errors name the key and the line, never a scalar value,
   an anchor name or a custom YAML tag. This keeps a password pasted in the wrong
   field out of the terminal, logs and reports. Errors may still print user text
-  that is not a value: key names (including unknown keys), connector ids (only
-  once known to be a valid slug) and naming-template placeholders.
-- **State dir placement** (ADR 0007, D1). `state_dir` must not equal or sit
-  inside `output.local`. It must not sit inside a synced folder: Google Drive,
-  Dropbox, OneDrive, iCloud Drive, Nextcloud, ownCloud, pCloud, Box, and any
-  `Library/CloudStorage/` provider on macOS. Detection is by folder name, on
-  whole path components, case-insensitive. The home directory's own components
-  are not checked. Symlinks are not resolved.
+  that is not a value: key names (including unknown keys) and connector ids
+  (only once known to be a valid slug).
+- **Naming templates are never quoted.** An invalid `naming.file` or
+  `naming.dir` is reported with the key and a fixed description of the allowed
+  grammar and placeholders, never with the template text or the placeholder
+  that failed.
+- **State dir placement, lexical check** (ADR 0007, D1). `state_dir` must not
+  equal or sit inside `output.local`, compared as path text. It must not sit
+  inside a synced folder: Google Drive, Dropbox, OneDrive, iCloud Drive,
+  Nextcloud, ownCloud, pCloud, Box, and any `Library/CloudStorage/` provider on
+  macOS. Detection is by folder name, on whole path components,
+  case-insensitive. The home directory's own components are not checked.
+  Symlinks are not resolved here; see the CLI check below.
 - `~` and `~/…` expand with an injected home directory. `~user` and relative
   paths are refused.
 
@@ -313,13 +323,57 @@ Files dropped in `inbox/` are untrusted input.
 - It then sets `PR_SET_DUMPABLE` to `0`: other processes of the same user cannot
   ptrace-attach or read `/proc/<pid>/mem`.
 - Outside Linux (macOS, Windows), `Harden` is a no-op today. It is idempotent.
-- It is meant to run before any secret is touched. It is wired with the CLI;
-  until then nothing calls it.
+- The CLI calls it first, on every invocation (`facto collect`, `facto
+  version`, even a usage error), before reading the config or any secret. If
+  it fails, facto prints the error and exits `1` without doing anything else.
+
+### Command line (`cmd/facto`)
+
+- **Config before side effects.** `collect` loads and validates `config.yaml`
+  first. A configuration error exits `2` and creates nothing: no output folder,
+  no state dir, no report.
+- **State dir outside the output folder, physically.** Once the output folder
+  exists and before the state dir is created, `collect` resolves both through
+  symlinks. `state_dir` may not exist yet: its nearest existing ancestor is
+  resolved and the missing part joined back. The resolved state dir and each of
+  its ancestors are compared with the output folder by file identity
+  (`os.SameFile`). This also catches bind mounts and case-insensitive file
+  systems. A match is a configuration error (exit `2`). A `state_dir` path that
+  goes through a dangling symlink is refused (exit `1`). The refusal message
+  names the keys, never the paths.
+- **Symlinks.** `output.local` may be a symlink to a folder (for example a
+  synced Drive folder): it is followed, and every write is then confined below
+  its target. `<output.local>/inbox` must be a real folder: a symlink there is
+  refused (exit `1`), because it would make `collect` move files from anywhere
+  into the output. A missing folder is created `0700` through fsx, never
+  through a dangling link.
+- **Prompts only on a terminal.** `collect` asks questions only when stdin is
+  a character device other than the null device, and never with
+  `--non-interactive`. Pipes, files and the `/dev/null` stdin of schedulers
+  never prompt. Prompts go to stderr; stdout carries the report only.
+- **Bounded, inert prompt input.** One answer is capped at 256 bytes; the rest
+  of a longer line is read and dropped in fixed-size chunks. The file name in a
+  prompt is Go-quoted, so control characters in it cannot drive the terminal.
+- **Signals.** `SIGINT` and `SIGTERM` cancel the run. The connector running is
+  reported `interrupted`, the report is still written, and the exit code is
+  `1`.
+- **No connector, no secret.** An enabled connector is refused (exit `2`): none
+  ships in J0, and a silently skipped account would hide a missing invoice.
+  `collect` never calls a secret provider. `output.gdrive.enabled: true` only
+  logs a warning.
+- **Logging.** `collect` logs at warning level to stderr, through the redacting
+  `logx` handler.
 
 ### Canary tests and scanners
 
 - Tests inject unique canary secrets. `make leakcheck` scans every file, log and
   report the tests produce and must print `0 canary hits`.
+- End-to-end scenarios (`make e2e`) run the real binary in a sandboxed home with
+  an environment built from scratch and an empty `PATH`. Every
+  `{{canary:<kind>}}` value must be absent from stdout, stderr and every file
+  under that home except the setup file that held it. Security negatives cover
+  a plaintext password in `config.yaml`, a group-readable config and symlinks
+  dropped in the inbox.
 - `make audit` runs govulncheck, gosec, gitleaks and osv-scanner at pinned
   versions (`make tools`, ADR 0001) and writes `security/scanners.json`.
 
@@ -382,8 +436,21 @@ Files dropped in `inbox/` are untrusted input.
   terminal is injected, `Close` still runs `lock`. The user's terminal session
   is locked too and must be unlocked again.
 - **YAML merge keys and aliases are accepted.** Strict decoding refuses unknown
-  and duplicate keys but not `<<` merge keys, anchors or aliases.
+  and duplicate keys but not `<<` merge keys, anchors or aliases. A merge key
+  can therefore set a key twice without a duplicate-key error.
 - **State dir sync detection is name-based.** A synced folder with an unusual
-  name, or reached through a symlink, is not detected.
+  name, or reached through a symlink, is not detected. Only the "inside the
+  output folder" rule follows symlinks.
 - **Config permissions are not checked on Windows**, like fsx.
-- **Process hardening is Linux-only** and not active until the CLI calls it.
+- **Process hardening is Linux-only.** On macOS and Windows, core dumps and
+  debugger attach are left to the OS defaults.
+- **The secret resolver is not wired into collection.** The `Secret` type and
+  the Bitwarden and keyring providers exist and are tested, but `collect` never
+  resolves a reference in J0. Their CLI path (interactive unlock, session reuse,
+  `Close` on exit) is untested end to end until J1.
+- **The output folder itself is not permission-checked.** An existing
+  `output.local` is used as it is, since it may be shared with other programs.
+  Folders facto creates in it are `0700`, and an existing year, category or
+  provider folder with group or world bits is refused.
+- **The state-dir identity check is a startup check.** A symlink changed after
+  the check and before the index opens is not caught.

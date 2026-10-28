@@ -6,8 +6,9 @@
 // and wrong types are configuration errors. Every validation error wraps
 // ErrInvalid, names the offending key and never quotes a scalar value (nor an
 // anchor name or custom tag), so that a password pasted in the wrong field
-// cannot reach a terminal, a log or a report. Key names, connector ids and
-// naming-template placeholders are user text that errors may still print.
+// cannot reach a terminal, a log or a report. Naming templates are never
+// quoted either. Key names and connector ids are user text that errors may
+// still print.
 package config
 
 import (
