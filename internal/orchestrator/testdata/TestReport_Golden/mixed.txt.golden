@@ -1,0 +1,17 @@
+facto report
+started: 2026-03-20T09:00:00Z
+finished: 2026-03-20T09:00:05Z
+summary: exists 1, failed 1, filed 2, skipped-duplicate 1, skipped-known-id 1
+warnings: 2
+
+documents:
+- filed inbox 2026-03-14_edf_invoice_84-12EUR_10234567.pdf -> 2026/energy/edf/2026-03-14_edf_invoice_84-12EUR_10234567.pdf
+- skipped-duplicate inbox edf/2026-03-14-scan.pdf
+- filed inbox impots/2026-10-02_avis.pdf -> 2026/housing/impots/2026-10-02_impots_tax-notice_avis-2026_v2.pdf
+- exists exemple FA-0042 -> 2026/services/exemple/2026-02-01_exemple_invoice_fa-0042.pdf
+- failed exemple FA-0043
+- skipped-known-id exemple FA-0041
+
+warnings:
+- too-large inbox big.pdf
+- unidentified inbox unknown.pdf
