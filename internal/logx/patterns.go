@@ -135,8 +135,10 @@ const maxQuoteDepth = 31
 
 // quotedReasons introduce a quoted reason of a net/url error that repeats
 // password bytes: the port when the userinfo holds an unencoded "/", "?" or
-// "#", the bad escape when it holds a "%".
-var quotedReasons = []string{"invalid port ", "invalid URL escape "}
+// "#", the bad escape when it holds a "%", and the bracketed text that
+// netip.ParseAddr rejects (`invalid host: ParseAddr("…"): … (at "…")`) when
+// the userinfo starts with "[" and the authority ends inside it.
+var quotedReasons = []string{"invalid port ", "invalid URL escape ", "ParseAddr(", "(at "}
 
 // maskParseErrors masks the raw URL that a net/url parse error quotes
 // (`parse "<raw>": <reason>`). The URL patterns cannot be trusted there: a
@@ -146,8 +148,8 @@ var quotedReasons = []string{"invalid port ", "invalid URL escape "}
 // errors survive. Everything up to the last "@" becomes "***@" (the scheme
 // goes too, so the URL patterns leave the rest alone), the query and
 // fragment of what remains become "?***", and an argument without "@" is
-// replaced whole: `parse "***"`. The quoted text of an "invalid port" or
-// "invalid URL escape" reason is masked as well. The same applies when the
+// replaced whole: `parse "***"`. The quoted text of a reason that repeats
+// password bytes (see quotedReasons) is masked as well. The same applies when the
 // error was re-quoted with %q or JSON at any depth, where the delimiting
 // quotes are escaped (`parse \"…\": …`). It runs in time linear in len(s).
 func maskParseErrors(s string) string {
@@ -241,8 +243,8 @@ func (l *lineScan) lastEnd(k int) int {
 // isClosing reports whether the quote at s[q] closes a parse argument
 // delimited by k backslashes and a quote. Its backslash run r must be the
 // delimiter's: at depth k a delimiter keeps r ≡ k (mod 2(k+1)), while a quote
-// escaped inside the argument gets r ≡ 2k+1. It must not open the quoted
-// reason of an "invalid port" or "invalid URL escape" error, and be followed
+// escaped inside the argument gets r ≡ 2k+1. It must not open a quoted
+// reason (see quotedReasons), and be followed
 // by ": ", the end of the line or, when re-quoted (k > 0), by a less escaped
 // quote that closes the outer string.
 func isClosing(s string, q, k int) bool {
@@ -375,8 +377,8 @@ func hasScheme(s string) bool {
 
 func isAlpha(c byte) bool { return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' }
 
-// maskQuotedReasons replaces the quoted text after every "invalid port " or
-// "invalid URL escape " of a line by Mask, at any quoting depth.
+// maskQuotedReasons replaces the quoted text after every quotedReasons entry
+// of a line by Mask, at any quoting depth.
 func maskQuotedReasons(line string) string {
 	for _, reason := range quotedReasons {
 		line = maskQuotedReason(line, reason)
@@ -483,7 +485,14 @@ func maskParseArg(arg string) string {
 	if q := strings.IndexAny(tail, "?#"); q >= 0 {
 		tail, query = tail[:q], "?"+Mask
 	}
-	if strings.Contains(arg[:at], "//") {
+	hierarchical := strings.Contains(arg[:at], "//")
+	if !hierarchical && strings.IndexByte(arg[:at], '\\') >= 0 {
+		// An opaque URL (no "//") only fails to parse on a control character,
+		// which the error quotes escaped; url.Parse has then cut it at "#", so
+		// what follows the last "@" may be password.
+		return Mask
+	}
+	if hierarchical {
 		host, _, cut := strings.Cut(tail, "/")
 		if !cut || host == "" || strings.IndexByte(host, '%') >= 0 {
 			return Mask

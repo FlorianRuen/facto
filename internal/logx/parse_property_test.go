@@ -39,9 +39,11 @@ func (p *prng) IntN(n int) int {
 const propMarker = "Qz7MRKv"
 
 // propAlphabet holds the characters a generated password is drawn from,
-// including every authority terminator, quote and escape character.
+// including every authority terminator, quote and escape character, the IPv6
+// host brackets and control characters (which url.Parse rejects and %q
+// escapes).
 const propAlphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" +
-	`/?#"' \@:%`
+	`/?#"' \@:%[]` + "\x01\x7f\t\n"
 
 var propSchemes = []string{"https://", "postgres://", "ftp://", "//"}
 
@@ -69,8 +71,19 @@ func propPassword(r *prng) string {
 	return b.String()
 }
 
+// propTokenTemplates hold pw as the whole userinfo of a hierarchical URL, in
+// an opaque URL (no "//"), or in brackets that url.Parse takes for an IPv6
+// host and quotes again in its reason; "%s" stands for pw.
+var propTokenTemplates = []string{
+	"https://%s@h/", "mailto:%s@h", "x:u:%s@h",
+	"https://[%s]/x@h.example/", "mailto:\x01%s#x@h",
+}
+
 // propRawURL returns a random raw URL whose password is pw.
 func propRawURL(r *prng, pw string) string {
+	if r.IntN(4) == 0 {
+		return strings.Replace(propTokenTemplates[r.IntN(len(propTokenTemplates))], "%s", pw, 1)
+	}
 	host := []string{"db.example", "host.example:5432", "h.example:x", "files.example"}[r.IntN(4)]
 	path := []string{"", "/x", "/p?t=1", "/a#f"}[r.IntN(4)]
 	user := []string{"u", "user", "bo b", ""}[r.IntN(4)]
