@@ -255,6 +255,17 @@ Files dropped in `inbox/` are untrusted input.
   parts` becomes `invalid token: *** 3 parts`, and `status_code=500` becomes
   `status_code=***` (`code` is a sensitive key fragment). Log detail is traded for
   safety.
+- **Token-looking provider ids are only masked in reports.** A provider id passes
+  the structural checks when it has no `://`, `?`, `=`, whitespace or control
+  characters and is not JWT-shaped. A bare token that a buggy connector uses as
+  its id is therefore written as-is to the SQLite index and slugged into the
+  filed name; only the report masks it. Conversely, long legitimate ids such as
+  `in_1MtHbELkdIwHu7ixl4OzzPMv` usually show as `***` in reports.
+- **Header-line masking edge cases.** A `Cookie:` line whose first value is
+  quoted (`Cookie: "lang"; sid=…`) only masks that first value, and request
+  `Cookie:` lines keep values of pairs named like Set-Cookie attributes
+  (`path=…`). Text that already contains a literal `***` right after the header
+  name is left as is.
 - **Inbox removal window.** Between the final identity check and the removal of a
   filed inbox file, a few syscalls remain. A file renamed over it exactly then
   would be removed instead.
