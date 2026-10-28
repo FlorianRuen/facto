@@ -15,3 +15,6 @@ Format: `YYYY-MM-DD <milestone> <task> <done|BLOCKED(Hn)|NEEDS(Hn)>: <one line> 
 2026-10-28 J0 T7 reviewed: PASS
 2026-10-28 J0 T11 done: httpx allowlisted HTTPS client 95.9%, review PASS; hardening follow-ups (wildcard TLDs, ports, body close) in progress (commit 54b19df)
 2026-10-28 J0 T9 review BLOCKING: logx leaks values nested in maps/structs (http.Header, []byte); fix in progress (commit ae1c014)
+2026-10-28 J0 T14 done: normalize naming/slug/ParseName 98.9%, review PASS; follow-up: escape refs shaped like v<N> (commit 79e3a71)
+2026-10-28 J0 T15 done: dedup split into BeforeFetch (rule 1) + Decide (rules 2-3), takes provider; rule 3 reachable via inbox/refetch only (commit bd1a390)
+2026-10-28 J0 T8 follow-up done: Windows reserved names complete, longest-prefix coverage gates (commits 0a9f2fc, f71a1e0); follow-up: check-coverage.sh must reject malformed gates and not skip packages silently
