@@ -28,3 +28,7 @@ Format: `YYYY-MM-DD <milestone> <task> <done|BLOCKED(Hn)|NEEDS(Hn)>: <one line> 
 2026-10-28 J0 store follow-up done: ErrSchemaTooNew refuses downgrades (commit ce60fb3)
 2026-10-28 J0 T9 review BLOCKING (3rd pass): cookies with hex values, promoted String() of embedded url types, non-https URLs; switching to fail-closed rendering for net/http, net/url, crypto types
 2026-10-28 J0 T21 BLOCKED(H1): output folders without hard links (exFAT, likely Google Drive for desktop) fail WriteNew; decide on a no-replace fallback (renameat2/renamex_np/MoveFileEx via x/sys + ADR, or non-atomic O_EXCL)
+2026-10-28 J0 T9 round 3: fail-closed net/url/crypto types, promoted methods walked, any-scheme URLs (commit ac229b9); 4th-pass leak (url.Parse error quoting userinfo with space/quote) fixed test-first (commit d3397ea); pending reviewer confirmation
+2026-10-28 J0 T21 follow-up done: fsx.ErrLinkUnsupported + startup ProbeLink, Put returns ref on ErrNotDurable, spec row updated (commit 7e68aae)
+2026-10-28 J0 T22 done: inbox scan/infer/Open/Done + fsx confined read API (ReadDir, OpenDir, OpenRegular) 88.5%; review: no blocking (commits ff067f9, fab5402)
+2026-10-28 J0 hardening queue (before T30): narrow ErrLinkUnsupported to EPERM/ENOTSUP/EXDEV; test hooks so fsx/inbox SameFile identity checks are exercised; logx keys code/pin/key; refuse wildcards over any *.amazonaws.com; defined types convertible to url/http structs
