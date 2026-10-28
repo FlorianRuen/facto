@@ -1,5 +1,6 @@
 // Package logx provides the redacting slog handler every facto logger goes
-// through (CLAUDE.md rule 5). It masks values by key (cookie, authorization,
+// through (CLAUDE.md rule 5). It cleans attribute keys and group names like
+// messages, masks values by key (cookie, authorization,
 // token, password, session…) at any group depth, masks token patterns (JWT,
 // long base64, the query string and userinfo of URLs of any scheme, the raw
 // URL quoted by net/url parse errors) in messages and string values, walks composite values (maps, structs,
@@ -125,16 +126,33 @@ func (h *Handler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	return &c
 }
 
-// WithGroup returns a handler nesting later attributes under name. A
-// sensitive name masks every attribute logged inside the group.
+// WithGroup returns a handler nesting later attributes under name, cleaned
+// like every attribute key (see cleanKey). A sensitive name masks every
+// attribute logged inside the group.
 func (h *Handler) WithGroup(name string) slog.Handler {
 	if name == "" {
 		return h
 	}
 	c := *h
-	c.inner = h.inner.WithGroup(name)
+	c.inner = h.inner.WithGroup(cleanKey(name))
 	c.masked = h.masked || h.sensitive(name)
 	return &c
+}
+
+// cleanKey makes an attribute key or group name safe to write: a buggy
+// caller may use a secret as the key (log.Info("m", tok, true)). Token
+// patterns are masked by Clean and control characters are removed so a key
+// cannot forge log lines. Sensitivity is still decided on the original key.
+func cleanKey(k string) string {
+	if k == "" {
+		return k
+	}
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, Clean(k))
 }
 
 // sensitive reports whether key, lowercased, contains a long sensitive
@@ -187,42 +205,44 @@ func words(key string) []string {
 	return out
 }
 
-// redact returns a copy of a that is safe to hand to the inner handler.
-// masked forces every leaf value to Mask.
+// redact returns a copy of a that is safe to hand to the inner handler: its
+// key and every nested group name go through cleanKey, its values through
+// Clean or Mask. masked forces every leaf value to Mask.
 func (h *Handler) redact(a slog.Attr, masked bool) slog.Attr {
 	if a.Equal(slog.Attr{}) {
 		return a // slog ignores empty attrs: keep it empty
 	}
 	v := a.Value.Resolve()
+	key := cleanKey(a.Key)
 	if v.Kind() == slog.KindGroup {
 		// An inline group (empty key) is not itself a key to match.
 		if a.Key != "" && (masked || h.sensitive(a.Key)) {
-			return slog.String(a.Key, Mask)
+			return slog.String(key, Mask)
 		}
 		group := v.Group()
 		red := make([]slog.Attr, len(group))
 		for i, ga := range group {
 			red[i] = h.redact(ga, masked)
 		}
-		return slog.Attr{Key: a.Key, Value: slog.GroupValue(red...)}
+		return slog.Attr{Key: key, Value: slog.GroupValue(red...)}
 	}
 	if masked || h.sensitive(a.Key) {
-		return slog.String(a.Key, Mask)
+		return slog.String(key, Mask)
 	}
 	switch v.Kind() {
 	case slog.KindString:
-		return slog.String(a.Key, h.capStr(Clean(v.String()), false))
+		return slog.String(key, h.capStr(Clean(v.String()), false))
 	case slog.KindAny:
-		return slog.String(a.Key, h.render(v.Any()))
+		return slog.String(key, h.render(v.Any()))
 	case slog.KindBool, slog.KindDuration, slog.KindFloat64, slog.KindInt64,
 		slog.KindTime, slog.KindUint64:
-		return slog.Attr{Key: a.Key, Value: v} // no secret shape
+		return slog.Attr{Key: key, Value: v} // no secret shape
 	case slog.KindGroup, slog.KindLogValuer:
 		// Unreachable: groups are handled above and Resolve never returns
 		// a LogValuer. Mask rather than trust it.
-		return slog.String(a.Key, Mask)
+		return slog.String(key, Mask)
 	}
-	return slog.String(a.Key, Mask) // a future Kind: fail closed
+	return slog.String(key, Mask) // a future Kind: fail closed
 }
 
 // controlFree replaces control characters (U+0000–U+001F, U+007F) by a
