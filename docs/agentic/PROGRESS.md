@@ -46,3 +46,5 @@ Format: `YYYY-MM-DD <milestone> <task> <done|BLOCKED(Hn)|NEEDS(Hn)>: <one line> 
 2026-10-28 J0 hardening 1: narrowing ErrLinkUnsupported conflicted with existing linkhook rows; decided denylist (ENOSPC, EDQUOT, EACCES, EROFS, ENOENT, EIO, ENAMETOOLONG, ctx errors keep their own error), implementation in progress
 2026-10-28 J0 T24 done: Run with isolated per-connector clients, sentinel states, panic recovery (bodies closed, values never logged), interrupted state, exit codes 0/1/2; review PASS (commits 374295d, 5e67921)
 2026-10-28 J0 hardening 2-5 review PASS (commits 9c1fdc0, ffffcc0, 716761b, b4ecebe)
+2026-10-28 J0 hardening 1 done: link errors classified by errno denylist (ENOSPC, EDQUOT, EACCES, EROFS, ENOENT, EIO, ENAMETOOLONG + Windows forms, ctx errors), review PASS (commit 86b6f46)
+2026-10-28 J0 logx parse-scope review BLOCKING: re-quoted errors after \n/\t, port reason with leading space, scheme-relative URLs leak; quadratic on 1 MB lines; fix with randomized property test in progress (commit 3464ccd)
