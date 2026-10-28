@@ -20,6 +20,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // MaxSize is the largest CII document ParseCII accepts, in bytes. Real
@@ -137,6 +139,8 @@ func nsTag(space string) string {
 // optional one (an unparsable issue date or grand total, say), fails the whole
 // parse with ErrInvalid instead of returning the other fields. Callers then
 // fall back to the next naming source rather than file a half-read invoice.
+// A field holding U+FFFD or a character XML does not allow (as encoding/xml
+// lets through for a character reference to a surrogate) is ErrInvalid too.
 func ParseCII(r io.Reader) (Invoice, error) {
 	buf, err := io.ReadAll(io.LimitReader(r, MaxSize+1))
 	if err != nil {
@@ -226,7 +230,11 @@ func scan(buf []byte) (rawFields, error) {
 				continue
 			}
 			if cur != 0 && len(stack) == curDepth {
-				raw.text[cur] = strings.TrimSpace(text.String())
+				v := strings.TrimSpace(text.String())
+				if !legalText(v) {
+					return rawFields{}, fmt.Errorf("%w: illegal character in a field", ErrInvalid)
+				}
+				raw.text[cur] = v
 				cur = 0
 			}
 			stack = stack[:len(stack)-1]
@@ -248,6 +256,27 @@ func scan(buf []byte) (rawFields, error) {
 		return rawFields{}, fmt.Errorf("%w: no root element", ErrInvalid)
 	}
 	return raw, nil
+}
+
+// legalText reports whether every rune of v is a legal XML Char (XML 1.0
+// §2.2) other than U+FFFD. encoding/xml turns a character reference to a
+// surrogate ("&#xD800;"), which no XML document may hold, into U+FFFD
+// instead of failing; a field holding it is refused rather than filed under
+// a name carrying the replacement character.
+func legalText(v string) bool {
+	for _, r := range v {
+		switch {
+		case r == utf8.RuneError:
+			return false
+		case r == 0x09 || r == 0x0A || r == 0x0D,
+			r >= 0x20 && r <= 0xD7FF,
+			r >= 0xE000 && r <= 0xFFFD,
+			r >= 0x10000 && r <= unicode.MaxRune:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func attr(t xml.StartElement, local string) string {
