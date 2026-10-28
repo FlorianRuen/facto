@@ -9,8 +9,10 @@ var (
 	// jwtRe matches a JWT: "eyJ" header, payload and (possibly empty)
 	// signature in base64url, separated by dots.
 	jwtRe = regexp.MustCompile(`eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*`)
-	// urlRe matches an http(s) URL up to whitespace or a quoting character.
-	urlRe = regexp.MustCompile(`(?i)https?://[^\s"'<>` + "`" + `]+`)
+	// urlRe matches a URL of any scheme (RFC 3986: a letter, then letters,
+	// digits, "+", "." or "-") followed by "://", up to whitespace or a
+	// quoting character.
+	urlRe = regexp.MustCompile(`(?i)[a-z][a-z0-9+.-]*://[^\s"'<>` + "`" + `]+`)
 )
 
 // minTokenRun is the number of consecutive alphanumerics that make a run of
@@ -18,7 +20,7 @@ var (
 const minTokenRun = 16
 
 // Clean masks token patterns in s, in this order: JWTs, long base64 runs,
-// then URL userinfo (removed) and query/fragment (replaced by "?***").
+// then the userinfo of URLs of any scheme (removed) and query/fragment (replaced by "?***").
 // File names, slugs, UUIDs, paths, hex digests and plain words survive.
 func Clean(s string) string {
 	s = jwtRe.ReplaceAllLiteralString(s, Mask)

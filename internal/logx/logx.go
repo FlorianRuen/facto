@@ -1,14 +1,19 @@
 // Package logx provides the redacting slog handler every facto logger goes
 // through (CLAUDE.md rule 5). It masks values by key (cookie, authorization,
 // token, password, session…) at any group depth, masks token patterns (JWT,
-// long base64, URL query strings and userinfo) in messages and string values,
-// walks composite values (maps, structs, slices) to mask sensitive map keys
-// of any key type, struct fields and byte values, renders url.URL without
-// userinfo, query values or fragment, masks url.Userinfo, never prints a
-// value implementing io.Reader or io.Writer (bodies, buffers, builders), renders errors and arbitrary values to
-// cleaned, length-capped strings, and resolves slog.LogValuer first so types
-// such as secrets.Secret mask themselves. See docs/spec.md "Data in memory
-// and in output".
+// long base64, the query string and userinfo of URLs of any scheme) in
+// messages and string values, walks composite values (maps, structs,
+// slices) to mask sensitive map keys of any key type, struct fields and byte
+// values, renders url.URL without userinfo, query values or fragment, masks
+// url.Userinfo, renders an http.Cookie as its name only, never prints a
+// value implementing io.Reader or io.Writer (bodies, buffers, builders), and
+// fails closed on every other type of net/http, net/url,
+// net/http/cookiejar and crypto/... (requests, responses, clients, jars,
+// TLS configurations, keys), whose String or Error is never called, even
+// when promoted to a struct that embeds it. It renders errors and arbitrary
+// values to cleaned, length-capped strings, and resolves slog.LogValuer
+// first so types such as secrets.Secret mask themselves. See docs/spec.md
+// "Data in memory and in output".
 //
 // logx imports only the standard library so that every other package,
 // internal/secrets included, can use it without an import cycle.

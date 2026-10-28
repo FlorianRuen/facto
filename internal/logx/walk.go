@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"reflect"
 	"slices"
@@ -24,7 +25,16 @@ var (
 	writerType    = reflect.TypeFor[io.Writer]()
 	urlType       = reflect.TypeFor[url.URL]()
 	userinfoType  = reflect.TypeFor[url.Userinfo]()
+	cookieType    = reflect.TypeFor[http.Cookie]()
+	headerType    = reflect.TypeFor[http.Header]()
+	valuesType    = reflect.TypeFor[url.Values]()
 )
+
+// sensitivePkgs are the standard-library packages whose types the walker
+// never inspects field by field nor renders through String (rule 13 of the
+// logx tests): they carry cookies, credentials, request state or keys.
+// Every crypto/... package is covered too (see sensitivePkg).
+var sensitivePkgs = []string{"net/http", "net/url", "net/http/cookiejar", "crypto"}
 
 // visit identifies a pointer, map or slice currently being walked, for cycle
 // detection. The type is part of the key so a struct and its first field,
@@ -104,9 +114,49 @@ func isStream(t reflect.Type) bool {
 	return false
 }
 
-// value renders v at the given depth. Order: nil, depth bound, URL and
-// userinfo, readers and writers, bytes, LogValuer, error, Stringer, then by
-// kind.
+// deref removes every pointer level from t.
+func deref(t reflect.Type) reflect.Type {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	return t
+}
+
+// sensitivePkg reports whether t, pointers removed, is defined in one of
+// sensitivePkgs or in a crypto/... package.
+func sensitivePkg(t reflect.Type) bool {
+	p := deref(t).PkgPath()
+	return slices.Contains(sensitivePkgs, p) || strings.HasPrefix(p, "crypto/")
+}
+
+// maxEmbed bounds how deep embedded fields are followed by embedsSensitive.
+const maxEmbed = 8
+
+// embedsSensitive reports whether t, pointers removed, is a struct that
+// embeds, directly or through other embedded structs, a field whose type
+// sensitivePkg covers. Such a struct may get String or Error by promotion
+// from that field (rule 14), so those methods are never called: the struct
+// is walked instead and the embedded field gets its own rendering.
+func embedsSensitive(t reflect.Type, depth int) bool {
+	t = deref(t)
+	if t.Kind() != reflect.Struct || depth > maxEmbed {
+		return false
+	}
+	for i := range t.NumField() {
+		f := t.Field(i)
+		if !f.Anonymous {
+			continue
+		}
+		if sensitivePkg(f.Type) || embedsSensitive(f.Type, depth+1) {
+			return true
+		}
+	}
+	return false
+}
+
+// value renders v at the given depth. Order: nil, depth bound, URL,
+// userinfo, cookie, readers and writers, sensitive stdlib types, bytes,
+// LogValuer, error, Stringer, then by kind.
 func (w *walker) value(v reflect.Value, depth int) {
 	if w.stop() {
 		return
@@ -134,21 +184,26 @@ func (w *walker) value(v reflect.Value, depth int) {
 		w.b.WriteString(Mask)
 		return
 	}
+	promoted := embedsSensitive(v.Type(), 0)
 	if v.CanInterface() {
-		if w.methods(v.Interface(), depth) {
+		if w.methods(v.Interface(), depth, !promoted) {
 			return
 		}
-	} else if hasMethods(v.Type()) {
+	} else if hasMethods(v.Type()) && !promoted {
 		// Unexported field: its methods cannot be called, and printing its
-		// raw state would bypass them. Fail closed.
+		// raw state would bypass them. Fail closed. A struct embedding a
+		// sensitive stdlib field is walked instead: every field, the
+		// embedded one included, gets its own safe rendering.
 		w.opaque(v.Type())
 		return
 	}
 	w.kind(v, depth)
 }
 
-// special renders URLs, userinfo, readers and writers, exported or not, and
-// reports whether v was one of them.
+// special renders URLs, userinfo, cookies, readers and writers and the
+// other types of sensitive stdlib packages, exported or not, and reports
+// whether v was one of them. http.Header and url.Values are left to the map
+// walk, which masks sensitive keys.
 func (w *walker) special(v reflect.Value) bool {
 	t := v.Type()
 	base := t
@@ -159,16 +214,36 @@ func (w *walker) special(v reflect.Value) bool {
 	case base == userinfoType:
 		w.b.WriteString(Mask)
 	case base == urlType:
-		if t.Kind() == reflect.Pointer {
-			v = v.Elem()
-		}
-		w.b.WriteString(redactURL(v))
+		w.b.WriteString(redactURL(reflect.Indirect(v)))
+	case base == cookieType:
+		name := reflect.Indirect(v).FieldByName("Name").String()
+		w.b.WriteString(controlFree(Clean(name)) + "=" + Mask)
 	case isStream(t):
 		w.opaque(t)
+	case base == headerType || base == valuesType:
+		return false
+	case sensitivePkg(t):
+		// An error of these packages (*url.Error, tls.AlertError…) keeps
+		// its cleaned text; anything else stays opaque, unwalked.
+		if err := asError(v); err != nil {
+			w.b.WriteString(controlFree(Clean(err.Error())))
+		} else {
+			w.opaque(t)
+		}
 	default:
 		return false
 	}
 	return true
+}
+
+// asError returns v as an error when it can be interfaced and implements
+// error, nil otherwise.
+func asError(v reflect.Value) error {
+	if !v.CanInterface() || !v.Type().Implements(errorType) {
+		return nil
+	}
+	err, _ := v.Interface().(error)
+	return err
 }
 
 // redactURL renders a url.URL value without its userinfo, query values or
@@ -194,11 +269,17 @@ func redactURL(v reflect.Value) string {
 }
 
 // methods renders x through LogValue, Error or String when it has one, and
-// reports whether it did.
-func (w *walker) methods(x any, depth int) bool {
+// reports whether it did. When text is false only LogValue is honoured:
+// Error and String may be promoted from an embedded sensitive field.
+func (w *walker) methods(x any, depth int, text bool) bool {
+	if lv, ok := x.(slog.LogValuer); ok {
+		w.slogValue(slog.AnyValue(lv).Resolve(), depth+1)
+		return true
+	}
+	if !text {
+		return false
+	}
 	switch t := x.(type) {
-	case slog.LogValuer:
-		w.slogValue(slog.AnyValue(t).Resolve(), depth+1)
 	case error:
 		w.b.WriteString(controlFree(Clean(t.Error())))
 	case fmt.Stringer:
