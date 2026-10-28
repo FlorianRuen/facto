@@ -18,3 +18,8 @@ Format: `YYYY-MM-DD <milestone> <task> <done|BLOCKED(Hn)|NEEDS(Hn)>: <one line> 
 2026-10-28 J0 T14 done: normalize naming/slug/ParseName 98.9%, review PASS; follow-up: escape refs shaped like v<N> (commit 79e3a71)
 2026-10-28 J0 T15 done: dedup split into BeforeFetch (rule 1) + Decide (rules 2-3), takes provider; rule 3 reachable via inbox/refetch only (commit bd1a390)
 2026-10-28 J0 T8 follow-up done: Windows reserved names complete, longest-prefix coverage gates (commits 0a9f2fc, f71a1e0); follow-up: check-coverage.sh must reject malformed gates and not skip packages silently
+2026-10-28 J0 T20 done: store SQLite index (modernc, 0600 db+wal/shm, NULL provider_id) 92.0%, review PASS; follow-up: refuse schema downgrade (commit 2358990)
+2026-10-28 J0 T29 done: per-scanner status + scanners.json writer, make audit fails on any scanner, review PASS (commit dbeeb60)
+2026-10-28 J0 T23b done: connector Env.HTTP is *httpx.Client, spec Env block updated (commit 60de3e5)
+2026-10-28 J0 T9 review BLOCKING (2nd pass): logx still leaks map[any]any keys, url.URL userinfo/query, request bodies; fix round in progress (commit c48b330)
+2026-10-28 J0 audit NEEDS(H1): govulncheck flags 10 Go 1.27.1 stdlib vulns fixed in 1.27.2/1.27.3; bump toolchain locally and in CI
