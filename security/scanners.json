@@ -1,0 +1,6 @@
+{
+  "gitleaks": "pass",
+  "gosec": "pass",
+  "govulncheck": "pass",
+  "osv-scanner": "fail"
+}
