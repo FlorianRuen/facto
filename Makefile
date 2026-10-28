@@ -24,9 +24,12 @@ lint-actions:
 test:
 	$(GO) test -short -count=1 $(PKGS)
 
+# The canary file is created 0600: testsecrets appends through fsx, which
+# refuses group/world-readable files.
 race:
+	rm -rf "$(ART_DIR)"
 	mkdir -p "$(ART_DIR)"
-	: > "$(CANARY_FILE)"
+	install -m 600 /dev/null "$(CANARY_FILE)"
 	$(GO) test -race -count=1 -coverprofile=.cache/coverage.out $(PKGS)
 
 cover: race
