@@ -12,3 +12,6 @@ Format: `YYYY-MM-DD <milestone> <task> <done|BLOCKED(Hn)|NEEDS(Hn)>: <one line> 
 2026-10-28 J0 T16 done: hardened Factur-X CII parsing 96.5%; coverage gates now apply to subpackages (commit 781ce11)
 2026-10-28 J0 T7 done: tools/go.mod + tools/actionlint/go.mod pinned, make tools installs both with real versions (commit b3e0f59)
 2026-10-28 J0 T10 BLOCKED(H1): writes under internal/secrets/ are denied by a permission rule not found in repo or user settings (managed policy?); tests ready in scratchpad j0sec/internal/secrets/*_test.go; Florian to allow the path or copy the files. Also blocks T13, T18, T19
+2026-10-28 J0 T7 reviewed: PASS
+2026-10-28 J0 T11 done: httpx allowlisted HTTPS client 95.9%, review PASS; hardening follow-ups (wildcard TLDs, ports, body close) in progress (commit 54b19df)
+2026-10-28 J0 T9 review BLOCKING: logx leaks values nested in maps/structs (http.Header, []byte); fix in progress (commit ae1c014)
