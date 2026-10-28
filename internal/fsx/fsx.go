@@ -1,7 +1,8 @@
 // Package fsx is the only way facto writes files. Every operation is confined
 // to a directory through os.Root (neither ".." nor symlinks can reach outside
 // it), files are created 0600, directories 0700, and whole-file writes are
-// atomic (temp file, fsync, rename).
+// atomic (temp file, fsync, rename; or hard link for WriteNew, which never
+// replaces).
 package fsx
 
 import (
@@ -38,7 +39,15 @@ var (
 	// place but could not fsync the parent directory: name already holds the
 	// new data, which may not survive a crash.
 	ErrNotDurable = errors.New("fsx: written but parent directory not synced")
+	// ErrLinkUnsupported reports that the filesystem holding the target
+	// directory refused to create a hard link (WriteNew needs one): FAT,
+	// exFAT, some network or FUSE mounts.
+	ErrLinkUnsupported = errors.New("fsx: filesystem does not support hard links")
 )
+
+// linkFunc is the hard-link primitive used by WriteNew and ProbeLink:
+// (*os.Root).Link in production, replaced by internal tests only.
+var linkFunc = (*os.Root).Link
 
 // Root confines every operation to one directory, using os.Root, so that
 // neither ".." nor symlinks can reach outside it. Safe for concurrent use.
@@ -116,7 +125,8 @@ func (r *Root) WriteAtomicFrom(ctx context.Context, name string, src io.Reader) 
 // temp file is left behind and name is not created. If fsyncing the parent
 // directory failed after the link, the error wraps ErrNotDurable: name already
 // holds the new content. The parent directory must exist (fs.ErrNotExist
-// otherwise). The filesystem must support hard links.
+// otherwise). The filesystem must support hard links: any other link failure
+// wraps ErrLinkUnsupported (see ProbeLink to check at startup).
 func (r *Root) WriteNew(ctx context.Context, name string, src io.Reader) error {
 	osName, err := cleanName(name)
 	if err != nil {
@@ -133,12 +143,49 @@ func (r *Root) WriteNew(ctx context.Context, name string, src io.Reader) error {
 }
 
 // link publishes tmp as osName without replacing anything, then removes tmp.
+// A link error other than fs.ErrExist means the filesystem cannot hard-link:
+// it wraps ErrLinkUnsupported and names the target directory.
 func (r *Root) link(tmp, osName string) error {
-	if err := r.root.Link(tmp, osName); err != nil {
-		return fmt.Errorf("link: %w", err)
+	if err := linkFunc(r.root, tmp, osName); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return fmt.Errorf("link: %w", err)
+		}
+		dir := filepath.ToSlash(filepath.Dir(osName))
+		return fmt.Errorf("link in %q: %w: %w", dir, ErrLinkUnsupported, err)
 	}
 	if err := r.root.Remove(tmp); err != nil {
 		return fmt.Errorf("linked but remove temp: %w", err)
+	}
+	return nil
+}
+
+// ProbeLink checks that the root directory supports hard links, which
+// WriteNew needs: it creates a 0600 temp file in the root, hard-links it to a
+// second temp name, then removes both. On success the directory is left as
+// it was. When the link fails the error wraps ErrLinkUnsupported and names
+// the root directory; no temp file is left behind.
+func (r *Root) ProbeLink(ctx context.Context) (err error) {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("fsx probe link: %w", err)
+	}
+	src := tempPrefix + rand.Text()
+	dst := tempPrefix + rand.Text()
+	f, err := r.root.OpenFile(src, os.O_WRONLY|os.O_CREATE|os.O_EXCL, filePerm)
+	if err != nil {
+		return fmt.Errorf("fsx probe link in %q: create temp: %w", r.root.Name(), err)
+	}
+	defer func() {
+		for _, n := range []string{src, dst} {
+			if rmErr := r.root.Remove(n); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
+				err = errors.Join(err, fmt.Errorf("fsx probe link: remove temp: %w", rmErr))
+			}
+		}
+	}()
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("fsx probe link in %q: close temp: %w", r.root.Name(), err)
+	}
+	if err := linkFunc(r.root, src, dst); err != nil {
+		return fmt.Errorf("fsx probe link in %q: %w: %w", r.root.Name(), ErrLinkUnsupported, err)
 	}
 	return nil
 }

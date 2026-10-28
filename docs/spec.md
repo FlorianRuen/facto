@@ -383,7 +383,7 @@ v1 writes to a local folder. The simplest Drive option is to point that folder a
 
 | Option | Implementation | Pros | Cons |
 | --- | --- | --- | --- |
-| Local folder | Atomic write (temp file then rename) | No dependency | No remote copy |
+| Local folder | Atomic write (temp file, hard link (never replaces), remove temp; the output folder must support hard links (checked at startup)) | No dependency | No remote copy |
 | Google Drive for desktop folder | `output: ~/Google Drive/My Drive/Invoices` | Zero OAuth code, already reliable | Needs the Drive client installed (no official Linux client) |
 | Native Drive API v3 | Desktop OAuth + `drive.file` | Works everywhere, including scheduled runs on a home server | OAuth client and token handling |
 
