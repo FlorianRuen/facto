@@ -60,7 +60,8 @@ func TestClean_KeepsNonSensitiveKeyValues(t *testing.T) {
 }
 
 func TestClean_KeyValueMaskingIsLinear(t *testing.T) {
-	t.Parallel()
+	// Not parallel: a wall-clock budget is only meaningful when the test does
+	// not share the CPU with the package's parallel property tests.
 	const size = 1 << 20
 	for name, unit := range map[string]string{
 		"keys without separator": "password ",

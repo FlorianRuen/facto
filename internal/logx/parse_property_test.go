@@ -263,7 +263,8 @@ func depthUnits() string {
 }
 
 func TestClean_LongLinesAreLinear(t *testing.T) {
-	t.Parallel()
+	// Not parallel: a wall-clock budget is only meaningful when the test does
+	// not share the CPU with the package's parallel property tests.
 	const size = 1 << 20
 	for name, unit := range map[string]string{
 		"parse with colon":     `parse "a": `,
