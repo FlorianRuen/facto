@@ -53,7 +53,7 @@ func newRealRig(t *testing.T) *realRig {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	r.st = st
-	loc, err := local.New(r.out)
+	loc, err := local.New(t.Context(), r.out)
 	if err != nil {
 		t.Fatalf("local.New: %v", err)
 	}

@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -39,10 +40,17 @@ type env struct {
 }
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), shutdownSignals()...)
 	code := run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
 	stop()
 	os.Exit(code)
+}
+
+// shutdownSignals cancel a run: Ctrl-C, and SIGTERM sent by service
+// managers (systemd stop, launchd unload). On Windows the runtime never
+// delivers SIGTERM; listing it is harmless.
+func shutdownSignals() []os.Signal {
+	return []os.Signal{os.Interrupt, syscall.SIGTERM}
 }
 
 // run is the production entry point: it hardens the process (no core dump,

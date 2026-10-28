@@ -13,7 +13,7 @@
 //
 //	// New opens the existing output folder dir (fsx.Open). It does not create
 //	// it: a missing dir wraps fs.ErrNotExist.
-//	func New(dir string) (*Local, error)
+//	func New(ctx context.Context, dir string) (*Local, error)
 //	func (l *Local) Close() error // later Put/Exists fail
 //
 //	func (l *Local) Name() string // "local"
@@ -83,7 +83,7 @@ func newLocal(t *testing.T) (l *local.Local, out, base string) {
 		t.Fatalf("mkdir out: %v", err)
 	}
 	out = filepath.Join(base, "out")
-	l, err = local.New(out)
+	l, err = local.New(t.Context(), out)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -137,7 +137,7 @@ func wantNoFiles(t *testing.T, dir string) {
 func TestNew_MissingDir(t *testing.T) {
 	t.Parallel()
 
-	_, err := local.New(filepath.Join(t.TempDir(), "missing"))
+	_, err := local.New(t.Context(), filepath.Join(t.TempDir(), "missing"))
 	if !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("New(missing): err = %v, want fs.ErrNotExist", err)
 	}

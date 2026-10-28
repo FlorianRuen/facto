@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/FlorianRuen/facto/internal/normalize"
 )
@@ -77,19 +78,56 @@ func (p *linePrompter) AskDoc(ctx context.Context, file string, guess normalize.
 // end of input).
 func (p *linePrompter) ask(prompt string) (answer string, ok bool, err error) {
 	_, _ = io.WriteString(p.out, prompt)
-	line, err := p.in.ReadString('\n')
+	line, n, err := p.readLine()
 	if err != nil && !errors.Is(err, io.EOF) {
 		return "", false, fmt.Errorf("read answer: %w", err)
 	}
-	if errors.Is(err, io.EOF) && line == "" {
+	if errors.Is(err, io.EOF) && n == 0 {
 		return "", false, nil
 	}
-	if len(line) > maxAnswerLen {
-		line = line[:maxAnswerLen]
-	}
-	line = strings.TrimSpace(line)
-	if line == "-" {
+	answer = strings.TrimSpace(line)
+	if answer == "-" {
 		return "", false, nil
 	}
-	return line, true, nil
+	return answer, true, nil
+}
+
+// readLine reads one line, newline included, and returns its first
+// maxAnswerLen bytes, cut back to a rune boundary, and its full length n.
+// The rest of a longer line is read and discarded in buffer-sized chunks,
+// so memory stays bounded whatever the input. err is io.EOF when the input
+// ends, with or without a partial last line.
+func (p *linePrompter) readLine() (line string, n int, err error) {
+	buf := make([]byte, 0, maxAnswerLen)
+	cut := false
+	for {
+		chunk, rerr := p.in.ReadSlice('\n')
+		n += len(chunk)
+		if room := maxAnswerLen - len(buf); len(chunk) > room {
+			chunk, cut = chunk[:room], true
+		}
+		buf = append(buf, chunk...)
+		if !errors.Is(rerr, bufio.ErrBufferFull) {
+			err = rerr
+			break
+		}
+	}
+	if cut {
+		buf = trimPartialRune(buf)
+	}
+	return string(buf), n, err
+}
+
+// trimPartialRune drops an incomplete UTF-8 sequence left at the end of b by
+// a byte cut. Complete runes and invalid bytes are kept as they are.
+func trimPartialRune(b []byte) []byte {
+	for i := len(b) - 1; i >= 0 && i >= len(b)-utf8.UTFMax; i-- {
+		if utf8.RuneStart(b[i]) {
+			if !utf8.FullRune(b[i:]) {
+				return b[:i]
+			}
+			return b
+		}
+	}
+	return b
 }

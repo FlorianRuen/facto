@@ -39,12 +39,17 @@ var _ dest.Destination = (*Local)(nil)
 // New checks once that dir supports hard links (fsx.Root.ProbeLink), which
 // Put needs, leaving it as it was: a folder on FAT, exFAT or some network or
 // FUSE mounts is refused with an error wrapping fsx.ErrLinkUnsupported.
-func New(dir string) (*Local, error) {
+// A ctx already canceled fails before dir is touched; the probe runs
+// under ctx.
+func New(ctx context.Context, dir string) (*Local, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("local destination: %w", err)
+	}
 	r, err := fsx.Open(dir)
 	if err != nil {
 		return nil, fmt.Errorf("local destination: %w", err)
 	}
-	if err := probeLink(r, context.Background()); err != nil {
+	if err := probeLink(r, ctx); err != nil {
 		return nil, errors.Join(fmt.Errorf("local destination: %w", err), r.Close())
 	}
 	return &Local{root: r}, nil

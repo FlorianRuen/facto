@@ -179,7 +179,7 @@ func TestLocal_RefusesSymlinkEscape(t *testing.T) {
 		_, out, base := newLocal(t)
 		link := filepath.Join(base, "link-to-out")
 		mustSymlink(t, out, link)
-		l, err := local.New(link)
+		l, err := local.New(t.Context(), link)
 		if err != nil {
 			t.Fatalf("New(symlinked output): %v", err)
 		}

@@ -7,10 +7,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"github.com/FlorianRuen/facto/internal/connector"
 	"github.com/FlorianRuen/facto/internal/inbox"
 	"github.com/FlorianRuen/facto/internal/normalize"
+	"github.com/FlorianRuen/facto/internal/orchestrator"
 )
 
 func TestLinePrompter_AskDoc(t *testing.T) {
@@ -326,4 +329,121 @@ func TestCloseErr(t *testing.T) {
 
 func isUnix() bool {
 	return !slices.Contains([]string{"windows", "plan9"}, runtimeGOOS)
+}
+
+// TestLinePrompter_LongAnswer: an answer line far longer than maxAnswerLen
+// is cut to maxAnswerLen bytes, the rest of the line is discarded (the
+// next answer is read from the next line), and a cut never splits a UTF-8
+// rune.
+func TestLinePrompter_LongAnswer(t *testing.T) {
+	t.Parallel()
+	day := time.Date(2026, time.March, 14, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name, line, wantProvider string
+	}{
+		{
+			name:         "4 MiB line",
+			line:         strings.Repeat("x", 4<<20),
+			wantProvider: strings.Repeat("x", maxAnswerLen),
+		},
+		{
+			name:         "rune across the cap",
+			line:         strings.Repeat("x", maxAnswerLen-1) + "é" + strings.Repeat("y", 10),
+			wantProvider: strings.Repeat("x", maxAnswerLen-1),
+		},
+		{
+			name:         "rune ending at the cap",
+			line:         strings.Repeat("x", maxAnswerLen-2) + "é" + strings.Repeat("y", 10),
+			wantProvider: strings.Repeat("x", maxAnswerLen-2) + "é",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := newLinePrompter(strings.NewReader(tc.line+"\n2026-03-14\n"), &bytes.Buffer{})
+			got, ok, err := p.AskDoc(t.Context(), "a.pdf", normalize.Doc{Provider: "edf"})
+			if err != nil || !ok {
+				t.Fatalf("AskDoc = ok %v, err %v; want ok", ok, err)
+			}
+			if got.Provider != tc.wantProvider {
+				t.Errorf("provider = %d bytes %.12q…, want %d bytes", len(got.Provider), got.Provider, len(tc.wantProvider))
+			}
+			if !got.Date.Equal(day) {
+				t.Errorf("date = %v, want %v (read from the line after the long one)", got.Date, day)
+			}
+		})
+	}
+}
+
+// TestConfigError: a configuration error exits 2 and wraps
+// orchestrator.ErrConfig and its cause.
+func TestConfigError(t *testing.T) {
+	t.Parallel()
+	cause := errors.New("synthetic cause")
+	err := configError(cause)
+	var ee *exitError
+	if !errors.As(err, &ee) || ee.code != orchestrator.ExitConfig {
+		t.Fatalf("configError = %#v, want an exitError with code %d", err, orchestrator.ExitConfig)
+	}
+	if !errors.Is(err, orchestrator.ErrConfig) || !errors.Is(err, cause) {
+		t.Errorf("configError(%v) = %v, want it to wrap orchestrator.ErrConfig and the cause", cause, err)
+	}
+	if !strings.Contains(err.Error(), "configuration error") || !strings.Contains(err.Error(), "synthetic cause") {
+		t.Errorf("message = %q", err.Error())
+	}
+}
+
+// cancelingPrompter cancels the run when asked about an inbox file, like
+// a Ctrl-C at the prompt.
+type cancelingPrompter struct{ cancel context.CancelFunc }
+
+func (p cancelingPrompter) AskDoc(ctx context.Context, _ string, _ normalize.Doc) (normalize.Doc, bool, error) {
+	p.cancel()
+	return normalize.Doc{}, false, fmt.Errorf("prompt: %w", ctx.Err())
+}
+
+// TestCollect_CanceledMidRunWritesReport: a run canceled after the state dir
+// exists is exit 1 and still writes its report (context.WithoutCancel).
+func TestCollect_CanceledMidRunWritesReport(t *testing.T) {
+	t.Parallel()
+	s := newSandbox(t)
+	cfg := s.writeConfig(t, validConfig)
+	writeFile(t, s.inbox, "scan.pdf", syntheticPDF(t))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var stdout, stderr bytes.Buffer
+
+	err := collect(ctx, s.env(), collectParams{
+		configPath: cfg,
+		period:     connector.Year(2026),
+		prompter:   cancelingPrompter{cancel: cancel},
+		stdout:     &stdout,
+		stderr:     &stderr,
+	})
+	var ee *exitError
+	if !errors.As(err, &ee) || ee.code != orchestrator.ExitAttention {
+		t.Fatalf("collect = %v, want exit %d\nstderr:\n%s", err, orchestrator.ExitAttention, stderr.String())
+	}
+	if ctx.Err() == nil {
+		t.Fatal("the prompter was never called: the run was not canceled mid-run")
+	}
+	for _, f := range []string{reportBase + ".json", reportBase + ".txt"} {
+		if _, err := os.Stat(filepath.Join(s.state, "reports", f)); err != nil {
+			t.Errorf("report %s not written after cancellation: %v", f, err)
+		}
+	}
+	if stdout.Len() == 0 {
+		t.Error("stdout is empty, want the report summary")
+	}
+}
+
+// TestShutdownSignals: collect stops cleanly on Ctrl-C and on SIGTERM
+// (systemd stop, launchd unload).
+func TestShutdownSignals(t *testing.T) {
+	t.Parallel()
+	got := shutdownSignals()
+	for _, want := range []os.Signal{os.Interrupt, syscall.SIGTERM} {
+		if !slices.Contains(got, want) {
+			t.Errorf("shutdownSignals() = %v, want it to contain %v", got, want)
+		}
+	}
 }

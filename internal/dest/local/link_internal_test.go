@@ -12,7 +12,7 @@
 //		var probeLink = (*fsx.Root).ProbeLink // func(*fsx.Root, context.Context) error
 //		var writeNew = (*fsx.Root).WriteNew   // func(*fsx.Root, context.Context, string, io.Reader) error
 //
-//	  - New(dir) opens dir, then calls probeLink exactly once. If the probe
+//	  - New(ctx, dir) opens dir, then calls probeLink exactly once. If the probe
 //	    fails, New closes the root and returns nil and an error wrapping the
 //	    probe error (so errors.Is(err, fsx.ErrLinkUnsupported) holds when the
 //	    filesystem has no hard links). Put and Exists never probe again. A
@@ -87,7 +87,7 @@ func TestNew_ProbesHardLinksOnce(t *testing.T) {
 		return r.ProbeLink(ctx)
 	})
 	dir := t.TempDir()
-	l, err := New(dir)
+	l, err := New(t.Context(), dir)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestNew_RefusesFolderWithoutHardLinks(t *testing.T) {
 	setProbeLink(t, func(*fsx.Root, context.Context) error {
 		return fmt.Errorf("fsx probe link %q: %w", dir, fsx.ErrLinkUnsupported)
 	})
-	l, err := New(dir)
+	l, err := New(t.Context(), dir)
 	if !errors.Is(err, fsx.ErrLinkUnsupported) {
 		t.Fatalf("New error = %v, want fsx.ErrLinkUnsupported", err)
 	}
@@ -137,7 +137,7 @@ func TestPut_ReturnsRefWhenPublishedButNotDurable(t *testing.T) {
 		return fmt.Errorf("fsx write %q: %w: %w", name, fsx.ErrNotDurable, syncErr)
 	})
 	dir := t.TempDir()
-	l, err := New(dir)
+	l, err := New(t.Context(), dir)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestPut_LinkUnsupportedReturnsZeroRef(t *testing.T) {
 		return fmt.Errorf("fsx write %q: %w", name, fsx.ErrLinkUnsupported)
 	})
 	dir := t.TempDir()
-	l, err := New(dir)
+	l, err := New(t.Context(), dir)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -183,5 +183,46 @@ func TestPut_LinkUnsupportedReturnsZeroRef(t *testing.T) {
 	}
 	if got := names(t, filepath.Join(dir, "2026", "edf")); !slices.Equal(got, []string(nil)) {
 		t.Errorf("entries = %v, want none", got)
+	}
+}
+
+// TestNew_CanceledContextFailsWithoutProbing: a canceled ctx makes New fail
+// with the context error before the hard-link probe touches the folder.
+func TestNew_CanceledContextFailsWithoutProbing(t *testing.T) {
+	calls := 0
+	setProbeLink(t, func(r *fsx.Root, ctx context.Context) error {
+		calls++
+		return r.ProbeLink(ctx)
+	})
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	l, err := New(ctx, dir)
+	if !errors.Is(err, context.Canceled) || l != nil {
+		t.Fatalf("New(canceled) = %v, %v; want nil, context.Canceled", l, err)
+	}
+	if calls != 0 {
+		t.Errorf("probeLink called %d times with a canceled ctx, want 0", calls)
+	}
+	if got := names(t, dir); len(got) != 0 {
+		t.Errorf("output folder after New = %v, want it untouched", got)
+	}
+}
+
+// TestNew_PassesContextToProbe: the probe runs under the caller's ctx.
+func TestNew_PassesContextToProbe(t *testing.T) {
+	type key struct{}
+	var got any
+	setProbeLink(t, func(r *fsx.Root, ctx context.Context) error {
+		got = ctx.Value(key{})
+		return r.ProbeLink(ctx)
+	})
+	l, err := New(context.WithValue(t.Context(), key{}, "caller"), t.TempDir())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	if got != "caller" {
+		t.Errorf("probe ctx value = %v, want the caller's ctx", got)
 	}
 }

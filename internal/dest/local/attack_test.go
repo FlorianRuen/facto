@@ -42,7 +42,7 @@ func atkOut(t *testing.T) (l *local.Local, out, outside string) {
 		}
 	}
 	out, outside = filepath.Join(base, "out"), filepath.Join(base, "outside")
-	l, err = local.New(out)
+	l, err = local.New(t.Context(), out)
 	if err != nil {
 		t.Fatal(err)
 	}

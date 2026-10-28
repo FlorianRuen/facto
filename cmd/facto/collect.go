@@ -162,10 +162,13 @@ type collectDeps struct {
 // that the state dir exists (opening the index creates it).
 func collectInto(ctx context.Context, e env, cfg *config.Config, d collectDeps, p collectParams, report *orchestrator.Report) (stateReady bool, err error) {
 	inboxPath := filepath.Join(cfg.Output.Local, inboxDir)
-	if err := ensureDir(cfg.Output.Local); err != nil {
+	// output.local may be a symlink (e.g. to a folder synced by Google
+	// Drive for desktop, docs/spec.md); inbox/ inside it may not: a link
+	// there would make collect move files from anywhere into the output.
+	if err := ensureDir(cfg.Output.Local, followLink); err != nil {
 		return false, fmt.Errorf("output folder: %w", err)
 	}
-	if err := ensureDir(inboxPath); err != nil {
+	if err := ensureDir(inboxPath, noFollowLink); err != nil {
 		return false, fmt.Errorf("inbox folder: %w", err)
 	}
 
@@ -175,8 +178,7 @@ func collectInto(ctx context.Context, e env, cfg *config.Config, d collectDeps, 
 	}
 	defer func() { err = errors.Join(err, closeErr("index", idx.Close())) }()
 
-	// local.New takes no ctx: its hard-link probe uses context.Background.
-	dst, err := local.New(cfg.Output.Local) //nolint:contextcheck // local.New has no ctx parameter yet; J0-T25, no GitHub issue yet
+	dst, err := local.New(ctx, cfg.Output.Local)
 	if err != nil {
 		return true, fmt.Errorf("open output folder: %w", err)
 	}
@@ -208,11 +210,20 @@ func collectInto(ctx context.Context, e env, cfg *config.Config, d collectDeps, 
 	return true, nil
 }
 
-// configError reports a configuration error (exit 2). Config errors name
-// the key at fault and never quote a value (package config).
+// configError reports a configuration error (exit 2) wrapping
+// orchestrator.ErrConfig and err. Config errors name the key at fault and
+// never quote a value (package config).
 func configError(err error) error {
-	return &exitError{code: orchestrator.ExitConfig, err: fmt.Errorf("configuration error: %w", err)}
+	return &exitError{code: orchestrator.ExitConfig, err: &configLoadError{err: err}}
 }
+
+// configLoadError is a configuration failure: errors.Is matches both
+// orchestrator.ErrConfig and the cause, the message is the cause's.
+type configLoadError struct{ err error }
+
+func (e *configLoadError) Error() string { return "configuration error: " + e.err.Error() }
+
+func (e *configLoadError) Unwrap() []error { return []error{orchestrator.ErrConfig, e.err} }
 
 // closeErr wraps a Close error with what was closed; nil stays nil.
 func closeErr(what string, err error) error {
@@ -255,11 +266,27 @@ func providerDefaults(cfg *config.Config) map[string]inbox.ProviderDefaults {
 	return out
 }
 
-// ensureDir creates dir 0700 when it does not exist; its parent must exist.
-// An existing directory is used as it is: the user's output folder may
-// legitimately be shared with other programs.
-func ensureDir(dir string) error {
-	fi, err := os.Lstat(dir)
+// linkPolicy says whether ensureDir accepts dir being a symlink to a
+// directory.
+type linkPolicy bool
+
+const (
+	followLink   linkPolicy = true  // dir may be a symlink to a directory
+	noFollowLink linkPolicy = false // dir must be a real directory
+)
+
+// ensureDir creates dir 0700 through fsx when it does not exist; its parent
+// must exist. An existing directory is used as it is: the user's output
+// folder may legitimately be shared with other programs. With followLink a
+// symlink to a directory is accepted (fsx and local.New then confine
+// everything under its target); a dangling one is not created through. With
+// noFollowLink any symlink is refused with fsx.ErrNotDir.
+func ensureDir(dir string, links linkPolicy) error {
+	stat := os.Lstat
+	if links == followLink {
+		stat = os.Stat
+	}
+	fi, err := stat(dir)
 	switch {
 	case err == nil && fi.IsDir():
 		return nil
