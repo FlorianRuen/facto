@@ -52,5 +52,7 @@ All five are actively released (dates above). Renovate (spec) bumps `tools/**/go
 
 ## Consequences
 - Reproducible tool versions in CI and locally; the product `go.mod` stays minimal.
-- `make tools` must install from both modfiles; T7 implements it.
+- `make tools` must install from both modfiles; T7 implements it. gosec and gitleaks only
+  report a version injected by `-ldflags -X`; `make tools` reads it back from
+  `tools/go.mod` with `go list -m`, so the pin stays in one place.
 - First `make tools` downloads a large graph (osv-scanner, gitleaks); CI should cache it.

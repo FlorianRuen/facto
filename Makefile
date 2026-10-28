@@ -53,5 +53,14 @@ audit:
 score-check:
 	./scripts/check-score.sh
 
-tools: ## pinned tool versions are set in tools/go.mod
-	$(GO) install -modfile=tools/go.mod tool
+# Pinned tool versions live in tools/go.mod and tools/actionlint/go.mod (ADR 0001):
+# actionlint has its own module because of a yaml/v4 rc clash with osv-scanner.
+# gosec and gitleaks only report a version injected by -ldflags; it is read
+# back from tools/go.mod so the pin stays in one place.
+TOOLS_VERSION = $(shell $(GO) list -modfile=tools/go.mod -m -f '{{.Version}}' $(1))
+TOOLS_LDFLAGS = -X main.Version=$(call TOOLS_VERSION,github.com/securego/gosec/v2) \
+	-X github.com/zricethezav/gitleaks/v8/version.Version=$(call TOOLS_VERSION,github.com/zricethezav/gitleaks/v8)
+
+tools: ## install pinned dev and security tools into GOBIN
+	$(GO) install -modfile=tools/go.mod -ldflags "$(TOOLS_LDFLAGS)" tool
+	$(GO) install -modfile=tools/actionlint/go.mod tool
