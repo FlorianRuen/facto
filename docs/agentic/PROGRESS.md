@@ -10,3 +10,4 @@ Format: `YYYY-MM-DD <milestone> <task> <done|BLOCKED(Hn)|NEEDS(Hn)>: <one line> 
 2026-10-28 J0 T8 done: fsx SafeName/JoinWithin, ErrNotDurable; Windows reserved-name gaps queued as review fix (commit 1bfed0d)
 2026-10-28 J0 T12 done: connector contracts, registry, periods, 100% (commit 315d6ba)
 2026-10-28 J0 T16 done: hardened Factur-X CII parsing 96.5%; coverage gates now apply to subpackages (commit 781ce11)
+2026-10-28 J0 T7 done: tools/go.mod + tools/actionlint/go.mod pinned, make tools installs both with real versions (commit b3e0f59)
