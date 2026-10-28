@@ -2,7 +2,9 @@
 // to a directory through os.Root (neither ".." nor symlinks can reach outside
 // it), files are created 0600, directories 0700, and whole-file writes are
 // atomic (temp file, fsync, rename; or hard link for WriteNew, which never
-// replaces).
+// replaces). It also offers confined read access that never follows a final
+// symlink and never blocks on a FIFO (ReadDir, OpenDir, OpenRegular), for
+// directories facto reads but does not own, such as inbox/.
 package fsx
 
 import (
