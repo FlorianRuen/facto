@@ -33,7 +33,7 @@ linters:
       rules:
         main:
           deny:
-            - pkg: "log"
+            - pkg: "log$"
               desc: "use log/slog through Env.Log"
             - pkg: "math/rand"
               desc: "use crypto/rand"
