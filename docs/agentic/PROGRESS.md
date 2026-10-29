@@ -90,3 +90,6 @@ Format: `YYYY-MM-DD <milestone> <task> <done|BLOCKED(Hn)|NEEDS(Hn)>: <one line> 
 2026-10-29 J1 process: test-writers now save a patch snapshot at handoff; two 'dropped test case' disputes (T4, T5) could not be settled from transcripts alone
 2026-10-29 J1 T3 done: depguard rule main denies golang.org/x/crypto/openpgp in all files incl. tests (ADR 0009); scripts/lint-selftest.sh runs in make verify and is proven non-vacuous (rule removed, tests excluded, empty module cache: each exits 1)
 BLOCKED(H1): add `go mod download && make lint-selftest` to the ci.yml lint job (T31); CI never runs make verify
+2026-10-29 J1 T15 done: keyring Get/Set/Delete bounded by ctx + DefaultTimeout (ErrTimeout wraps DeadlineExceeded), Delete idempotent and never reads, Set exposes value before the bounded call (no empty write after wipe); resolver CloseAll no longer blocked by a hung provider (late Secret wiped, ErrClosed); secret 98.7%, keyring 98.8%; review PASS
+2026-10-29 J1 follow-up: internal/secret/bitwarden TestAttack_ExecRunnerGrandchildHoldingPipesIsBounded wall-clock bound fails under heavy load (load avg 140): make deterministic
+2026-10-29 J1 plan: T17 check renamed make release-e2e-check (J0 release-check is the goreleaser snapshot); --host-resolver-rules allowed in release (ADR 0008), only e2e loopback mapping / test CA code forbidden

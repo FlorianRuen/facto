@@ -22,8 +22,56 @@ type fakeBackend struct {
 	// valueWithErr is returned together with err (a misbehaving backend).
 	valueWithErr string
 
+	// setErr and delErr are returned by Set and Delete when set.
+	setErr error
+	delErr error
+
 	mu    sync.Mutex
-	calls [][2]string
+	calls [][2]string // Get calls only
+	ops   []backendOp // every Set and Delete call, in order
+}
+
+// backendOp records one Set or Delete reaching the backend.
+type backendOp struct {
+	op, service, user, value string
+}
+
+// Set stores value under {service, user} unless setErr is set.
+func (b *fakeBackend) Set(service, user, value string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.ops = append(b.ops, backendOp{op: "set", service: service, user: user, value: value})
+	if b.setErr != nil {
+		return b.setErr
+	}
+	if b.values == nil {
+		b.values = map[[2]string]string{}
+	}
+	b.values[[2]string{service, user}] = value
+	return nil
+}
+
+// Delete removes {service, user}; a missing entry wraps ErrNotFound, as
+// go-keyring does.
+func (b *fakeBackend) Delete(service, user string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.ops = append(b.ops, backendOp{op: "delete", service: service, user: user})
+	if b.delErr != nil {
+		return b.delErr
+	}
+	k := [2]string{service, user}
+	if _, ok := b.values[k]; !ok {
+		return fmt.Errorf("fake keyring: %w", keyring.ErrNotFound)
+	}
+	delete(b.values, k)
+	return nil
+}
+
+func (b *fakeBackend) opLog() []backendOp {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]backendOp(nil), b.ops...)
 }
 
 func (b *fakeBackend) Get(service, user string) (string, error) {

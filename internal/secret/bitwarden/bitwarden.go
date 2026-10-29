@@ -167,7 +167,9 @@ func (p *Provider) Resolve(ctx context.Context, ref secret.Ref) (secret.Secret, 
 }
 
 // Close runs bw lock when a session key is held or bw unlock was run, then
-// wipes the key. It waits for an in-flight Resolve to return. It is
+// wipes the key. It waits for an in-flight Resolve to return;
+// secret.Resolver.CloseAll cancels the in-flight ctx before calling Close, so
+// the wait is bounded by the runner killing the subprocess. It is
 // idempotent; later Resolve calls fail with secret.ErrClosed.
 func (p *Provider) Close() error {
 	p.mu.Lock()
