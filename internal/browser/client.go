@@ -103,15 +103,24 @@ func (c *Client) Call(ctx context.Context, sessionID, method string, params any)
 	// Call past ctx; closing the transport unblocks it.
 	// A failed or partial write leaves the stream unusable: the client dies
 	// here, even when Call has already returned on ctx.
+	// Once Send has returned, the encoded request (which may hold a value
+	// exposed at the last call site, such as Input.insertText) is cleared:
+	// "wiped where feasible" (ADR 0008).
 	sent := make(chan error, 1)
 	go func() {
 		err := c.t.Send(msg)
+		clear(msg)
 		if err != nil && !errors.Is(err, ErrBadFrame) {
 			c.die(err)
 		}
 		sent <- err
 	}()
 
+	// A response may overtake Send's return (the peer answers while the
+	// write call is unwinding): it is held until Send has returned, so a
+	// result never comes back while the transport may still read msg.
+	respCh := pc.ch
+	var held *response
 	for {
 		select {
 		case err := <-sent:
@@ -120,8 +129,15 @@ func (c *Client) Call(ctx context.Context, sessionID, method string, params any)
 				c.forget(id)
 				return nil, err
 			}
-		case r := <-pc.ch:
-			return r.result, r.err
+			if held != nil {
+				return held.result, held.err
+			}
+		case r := <-respCh:
+			if sent == nil {
+				return r.result, r.err
+			}
+			respCh = nil
+			held = &r
 		case <-ctx.Done():
 			c.forget(id)
 			return nil, fmt.Errorf("cdp call: %w", ctx.Err())

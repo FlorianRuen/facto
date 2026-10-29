@@ -76,6 +76,9 @@ func (t *PipeTransport) Send(msg []byte) error {
 	}
 	frame := make([]byte, len(msg)+1)
 	copy(frame, msg)
+	// The frame may hold a value exposed at the last call site: cleared once
+	// written (best effort, like the client's request buffer).
+	defer clear(frame)
 	t.wmu.Lock()
 	defer t.wmu.Unlock()
 	if t.closed.Load() {
