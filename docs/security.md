@@ -155,7 +155,13 @@ Every facto logger goes through `logx.Handler`.
 
 ### File safety (`internal/fsx`, `internal/dest/local`)
 
-`internal/fsx` is the only package that writes files.
+`internal/fsx` is the only package that writes files. forbidigo in
+`.golangci.yml` refuses `os.WriteFile`, `os.Create`, `os.OpenFile`,
+`os.MkdirAll` everywhere else, and (SEC-J0-16) every other `os` mutation:
+`Mkdir`, `MkdirTemp`, `CreateTemp`, `Rename`, `Remove`, `RemoveAll`, `Symlink`,
+`Link`, `Chmod`, `Chown`, `Lchown`, `Chtimes`, `Truncate`. `cmd/` is exempt
+only from the `fmt.Print` rule. Test files may use the mutations of the
+second list to build hostile fixtures (symlinks, unreadable files).
 
 - **Confinement:** every operation goes through `os.Root`. Neither `..` nor a
   symlink can reach outside the root directory.

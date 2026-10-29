@@ -29,6 +29,10 @@ linters:
           msg: "use internal/httpx (domain allowlist)"
         - pattern: '^os\.(WriteFile|Create|OpenFile|MkdirAll)$'
           msg: "use internal/fsx (permissions, atomic writes, SafeName)"
+        # SEC-J0-16: every other file-system mutation. Tests may use these to
+        # build hostile fixtures (symlinks, unreadable files): see exclusions.
+        - pattern: '^os\.(Mkdir|MkdirTemp|CreateTemp|Rename|Remove|RemoveAll|Symlink|Link|Chmod|Chown|Lchown|Chtimes|Truncate)$'
+          msg: "fs mutation outside internal/fsx: use internal/fsx"
         - pattern: '^time\.Now$'
           msg: "inject clock.Clock"
     depguard:
@@ -72,8 +76,16 @@ linters:
               desc: "network I/O only through internal/httpx (CLAUDE.md rule 5)"
   exclusions:
     rules:
-      - path: '^(cmd/|internal/fsx/|internal/httpx/|internal/clock/)'
+      - path: '^(internal/fsx/|internal/httpx/|internal/clock/)'
         linters: [forbidigo]
+      # cmd/ is the CLI: it prints to stdout/stderr. Every other forbidigo
+      # rule (httpx, fsx, clock) applies to it (SEC-J0-15, SEC-J0-16).
+      - path: '^cmd/'
+        linters: [forbidigo]
+        text: 'use the injected slog logger'
+      - path: '_test\.go$'
+        linters: [forbidigo]
+        text: 'fs mutation outside internal/fsx'
       - path: '_test\.go$'
         linters: [wrapcheck]
 formatters:
