@@ -1,6 +1,8 @@
 package httpx_test
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -47,8 +49,7 @@ func TestClient_ErrorOmitsCanaryFromURLAndHeaders(t *testing.T) {
 	bearer := testsecrets.Canary(t, testsecrets.Session)
 	canaries := []string{query, frag, userPW, cookie, bearer}
 
-	slow := make(chan struct{})
-	t.Cleanup(func() { close(slow) })
+	slow := newSlowRoute()
 	e := newEnv(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/to-evil":
@@ -58,14 +59,12 @@ func TestClient_ErrorOmitsCanaryFromURLAndHeaders(t *testing.T) {
 		case "/loop":
 			http.Redirect(w, r, "/loop?tok="+query, http.StatusFound)
 		case "/slow":
-			select {
-			case <-r.Context().Done():
-			case <-slow:
-			}
+			slow.serve(w, r)
 		default:
 			ok(w, r)
 		}
 	})
+	slow.releaseAtCleanup(t) // after newEnv: runs before the server's Close
 	allowed := []string{"fournisseur.test"}
 
 	base := e.opts()
@@ -73,14 +72,17 @@ func TestClient_ErrorOmitsCanaryFromURLAndHeaders(t *testing.T) {
 	untrusted.RootCAs = nil
 	dialFail := e.opts()
 	dialFail.DialContext = failingDial
+	// The timeout case reaches its deadline through expireOnArrival once
+	// the request is blocked in /slow; Timeout is only a safety net.
 	fast := e.opts()
-	fast.Timeout = 100 * time.Millisecond
+	fast.Timeout = time.Minute
 
 	q := "?tok=" + query + "&page=2#" + frag
 	cases := []struct {
-		name string
-		opts httpx.Options
-		url  string
+		name     string
+		opts     httpx.Options
+		url      string
+		deadline bool // send with expireOnArrival; want DeadlineExceeded
 	}{
 		{name: "disallowed domain", opts: base, url: "https://evil.test/collect" + q},
 		{name: "disallowed with userinfo", opts: base, url: "https://someone:" + userPW + "@evil.test/" + q},
@@ -91,13 +93,17 @@ func TestClient_ErrorOmitsCanaryFromURLAndHeaders(t *testing.T) {
 		{name: "redirect off allowlist", opts: base, url: "https://fournisseur.test/to-evil" + q},
 		{name: "redirect to http", opts: base, url: "https://fournisseur.test/to-http" + q},
 		{name: "redirect loop", opts: base, url: "https://fournisseur.test/loop" + q},
-		{name: "timeout", opts: fast, url: "https://fournisseur.test/slow" + q},
+		{name: "timeout", opts: fast, url: "https://fournisseur.test/slow" + q, deadline: true},
 	}
 
 	var report strings.Builder
 	for _, tc := range cases {
 		c := mustNew(t, allowed, tc.opts)
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, tc.url, http.NoBody)
+		ctx := t.Context()
+		if tc.deadline {
+			ctx = expireOnArrival(t, slow)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, tc.url, http.NoBody)
 		if err != nil {
 			t.Fatalf("%s: NewRequest: %v", tc.name, err)
 		}
@@ -112,7 +118,14 @@ func TestClient_ErrorOmitsCanaryFromURLAndHeaders(t *testing.T) {
 			t.Errorf("%s: Do succeeded, want an error", tc.name)
 			continue
 		}
+		if tc.deadline && !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("%s: error is not context.DeadlineExceeded (message not printed)", tc.name)
+		}
 		recordChain(t, &report, tc.name, err, canaries)
+	}
+
+	if n := slow.hits.Load(); n != 1 {
+		t.Errorf("/slow hit %d times, want 1", n)
 	}
 
 	// Malformed URL through Get.

@@ -43,12 +43,15 @@ linters:
               desc: "use log/slog through Env.Log"
             - pkg: "math/rand"
               desc: "use crypto/rand"
+            - pkg: "io/ioutil"
+              desc: "deprecated; files only through internal/fsx (CLAUDE.md rule 5)"
         # CLAUDE.md rule 5 (SEC-J0-15): network I/O only through internal/httpx
         # (domain allowlist, TLS, redirect checks). Applies to every
         # production file, cmd/ and connectors/ included. Same list as
         # internal/httpx/boundary_test.go. Parsing-only packages (net/url,
         # net/netip, net/mail) stay allowed. Test files are out of scope:
-        # they run httptest servers and fake listeners.
+        # they run httptest servers and fake listeners. cgo (import "C") is
+        # denied by boundary_test.go only: depguard never sees that import.
         network:
           files:
             - "$all"

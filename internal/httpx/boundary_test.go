@@ -34,6 +34,7 @@ var networkPkgs = []string{
 	"golang.org/x/net/",
 	"google.golang.org/grpc",
 	"google.golang.org/grpc/",
+	"C", // cgo: native code can open sockets; not seen by depguard, this test only
 }
 
 // networkAllowed lists module-relative slash paths (a directory ending in
@@ -122,6 +123,8 @@ func TestNetworkViolations_Detector(t *testing.T) {
 		{"tls dial", "internal/x/x.go", `package x; import "crypto/tls"`, 1},
 		{"rpc and smtp", "internal/x/x.go", `package x; import ("net/rpc/jsonrpc"; "net/smtp")`, 2},
 		{"x/net", "internal/x/x.go", `package x; import "golang.org/x/net/http2"`, 1},
+		{"cgo", "internal/x/x.go", `package x; import "C"`, 1},
+		{"C-prefixed path is not cgo", "internal/x/x.go", `package x; import "Codec/thing"`, 0},
 		{"renamed import", "internal/x/x.go", `package x; import h "net/http"`, 1},
 		{"net/url is parsing only", "internal/store/x.go", `package store; import "net/url"`, 0},
 		{"net/netip is parsing only", "internal/x/x.go", `package x; import "net/netip"`, 0},

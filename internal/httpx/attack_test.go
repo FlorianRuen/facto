@@ -214,7 +214,7 @@ func TestAttack_HttpxErrorsNeverCarryCanaries(t *testing.T) {
 	secretURL := func(host string) string {
 		return "https://synthetic:" + pw + "@" + host + "/dl?token=" + tok + "#sid=" + sess
 	}
-	slow := make(chan struct{})
+	slow := newSlowRoute()
 	e := newEnv(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/redirect-off":
@@ -225,16 +225,14 @@ func TestAttack_HttpxErrorsNeverCarryCanaries(t *testing.T) {
 			w.Header().Set("Location", "https://fournisseur.test/%zz?token="+tok)
 			w.WriteHeader(http.StatusFound)
 		case "/slow":
-			<-slow
+			slow.serve(w, r)
 		default:
 			ok(w, r)
 		}
 	})
-	// Registered after newEnv: cleanups run last-in first-out, and the
-	// server's Close waits for the blocked handler.
-	t.Cleanup(func() { close(slow) })
-	withSecrets := func(c *httpx.Client, rawURL string) error {
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, rawURL, http.NoBody)
+	slow.releaseAtCleanup(t) // after newEnv: runs before the server's Close
+	withSecretsCtx := func(ctx context.Context, c *httpx.Client, rawURL string) error {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, http.NoBody)
 		if err != nil {
 			return err
 		}
@@ -248,13 +246,16 @@ func TestAttack_HttpxErrorsNeverCarryCanaries(t *testing.T) {
 		}
 		return err
 	}
+	withSecrets := func(c *httpx.Client, rawURL string) error {
+		return withSecretsCtx(t.Context(), c, rawURL)
+	}
 	allowed := e.client(t, "fournisseur.test")
 	u, err := url.Parse("https://fournisseur.test/")
 	if err != nil {
 		t.Fatal(err)
 	}
 	allowed.Jar().SetCookies(u, []*http.Cookie{{Name: "sid", Value: ck, Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode}})
-	slowClient := mustNew(t, []string{"fournisseur.test"}, httpx.Options{RootCAs: e.pool, DialContext: e.dial, Timeout: 300 * time.Millisecond})
+	slowClient := mustNew(t, []string{"fournisseur.test"}, httpx.Options{RootCAs: e.pool, DialContext: e.dial, Timeout: time.Minute}) // safety net: expireOnArrival drives the deadline
 	untrusted := mustNew(t, []string{"fournisseur.test"}, httpx.Options{DialContext: e.dial})
 	failing := mustNew(t, []string{"fournisseur.test"}, httpx.Options{DialContext: failingDial})
 
@@ -270,9 +271,18 @@ func TestAttack_HttpxErrorsNeverCarryCanaries(t *testing.T) {
 		"malformed location": func() error {
 			return withSecrets(allowed, "https://fournisseur.test/redirect-bad?token="+tok)
 		},
-		"failed dial":      func() error { return withSecrets(failing, secretURL("fournisseur.test")) },
-		"untrusted cert":   func() error { return withSecrets(untrusted, secretURL("fournisseur.test")) },
-		"timeout":          func() error { return withSecrets(slowClient, "https://fournisseur.test/slow?token="+tok) },
+		"failed dial":    func() error { return withSecrets(failing, secretURL("fournisseur.test")) },
+		"untrusted cert": func() error { return withSecrets(untrusted, secretURL("fournisseur.test")) },
+		"timeout": func() error {
+			err := withSecretsCtx(expireOnArrival(t, slow), slowClient, "https://fournisseur.test/slow?token="+tok)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Errorf("timeout: error is not context.DeadlineExceeded (message not printed)")
+			}
+			if n := slow.hits.Load(); n != 1 {
+				t.Errorf("timeout: /slow hit %d times, want 1", n)
+			}
+			return err
+		},
 		"canceled context": func() error { return atkCanceled(allowed, secretURL("fournisseur.test")) },
 		"malformed url": func() error {
 			return atkGet(t, allowed, "https://fournisseur.test/%zz?token="+tok)

@@ -616,19 +616,20 @@ func TestClient_IgnoresProxyEnvUnlessAllowed(t *testing.T) {
 
 func TestClient_Timeout(t *testing.T) {
 	t.Parallel()
-	release := make(chan struct{})
-	e := newEnv(t, func(_ http.ResponseWriter, r *http.Request) {
-		select {
-		case <-r.Context().Done():
-		case <-release:
-		}
-	})
-	t.Cleanup(func() { close(release) }) // runs before the server closes
+	// The handler never answers before the test ends, so the only possible
+	// outcome is Options.Timeout firing (during dial, TLS or the wait,
+	// depending on load): no success path depends on wall-clock time.
+	slow := newSlowRoute()
+	e := newEnv(t, slow.serve)
+	slow.releaseAtCleanup(t) // after newEnv: runs before the server's Close
 	o := e.opts()
 	o.Timeout = 100 * time.Millisecond
 	_, _, err := get(t, mustNew(t, []string{"fournisseur.test"}, o), "https://fournisseur.test/slow")
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("error = %v, want context.DeadlineExceeded in the chain", err)
+	}
+	if n := slow.hits.Load(); n > 1 {
+		t.Errorf("/slow hit %d times, want at most 1 (no retry after the deadline)", n)
 	}
 }
 
