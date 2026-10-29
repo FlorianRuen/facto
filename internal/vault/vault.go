@@ -68,14 +68,18 @@ type Sealer struct {
 }
 
 // NewSealer returns a Sealer reading nonces from r. Production passes
-// crypto/rand.Reader.
-func NewSealer(r io.Reader) *Sealer {
-	return &Sealer{rand: r}
+// crypto/rand.Reader. A nil r is refused with ErrInvalidArgument instead of
+// panicking at the first Seal.
+func NewSealer(r io.Reader) (*Sealer, error) {
+	if r == nil {
+		return nil, fmt.Errorf("%w: nil random source", ErrInvalidArgument)
+	}
+	return &Sealer{rand: r}, nil
 }
 
 // Seal is NewSealer(crypto/rand.Reader).Seal.
 func Seal(ctx context.Context, installID, id string, key Key, plaintext []byte) ([]byte, error) {
-	return NewSealer(rand.Reader).Seal(ctx, installID, id, key, plaintext)
+	return (&Sealer{rand: rand.Reader}).Seal(ctx, installID, id, key, plaintext)
 }
 
 // Seal encrypts plaintext under key with a fresh nonce and returns the
@@ -156,7 +160,7 @@ func additionalData(installID, id string) []byte {
 }
 
 func checkArgs(installID, id string) error {
-	if !validInstallID(installID) || !validConnectorID(id) {
+	if !validInstallID(installID) || !ValidConnectorID(id) {
 		return ErrInvalidArgument
 	}
 	return nil
@@ -176,9 +180,10 @@ func validInstallID(s string) bool {
 	return true
 }
 
-// validConnectorID reports whether s matches the registry rule
-// ^[a-z0-9]+(-[a-z0-9]+)*$ and is at most 40 bytes.
-func validConnectorID(s string) bool {
+// ValidConnectorID reports whether s matches the registry rule
+// ^[a-z0-9]+(-[a-z0-9]+)*$ and is at most 40 bytes: exactly the IDs
+// connector.ValidateInfo accepts. Seal, Open and the Store use it.
+func ValidConnectorID(s string) bool {
 	if s == "" || len(s) > maxConnectorID {
 		return false
 	}

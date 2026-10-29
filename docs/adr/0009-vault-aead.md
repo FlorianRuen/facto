@@ -150,7 +150,11 @@ With `sessions: ephemeral`, at startup facto lists `sessions/` with `fsx` `ReadD
 removes every `*.sess` found, configured connector or not, **without opening or reading
 it**. For each removed file whose name is a valid connector id, it deletes the keyring
 entry `<install-id>/<connector-id>` with `Delete` (T15), **without reading it**. It logs
-one line for the run (count removed, no content). Nothing is written to `sessions/` and
+one line for the run (count removed, no content). Keys are deleted only when a keyring is
+usable and `install-id` is valid; with `sessions: ephemeral` and no usable keyring, the
+`*.sess` files are still removed unopened (the user chose ephemeral), no keyring call is
+made, and the same single line is logged (J1 T16 decision). The "no keyring in
+production" fallback above applies to persistent mode only. Nothing is written to `sessions/` and
 no key is read or written in the keyring during the run.
 
 Leftover keys are **not** harmless: any backup or synced copy of the `.sess` stays
@@ -205,8 +209,10 @@ packet parsing, key management and legacy ciphers we do not need for a single-re
 - `golang.org/x/crypto` v0.58.0: BSD-3-Clause (LICENSE read, "Neither the name of Google
   LLC" clause). Packages compiled: `chacha20poly1305`, `chacha20`, `internal/poly1305`,
   `internal/alias`.
-- `golang.org/x/sys` v0.49.0 (`cpu` package, used by chacha20poly1305): BSD-3-Clause,
-  already in `go.mod` (indirect) and already compiled (`x/sys/unix`).
+- `golang.org/x/sys` v0.49.0: BSD-3-Clause, already in `go.mod` and already compiled.
+  Packages used: `cpu` (by chacha20poly1305), `unix` (`Flock`) and `windows`
+  (`LockFileEx`/`UnlockFileEx`) by `internal/fsx` for the session lock (T16, direct
+  requirement since then).
 - No other module is added. For reference, the rejected `filippo.io/age` v1.3.2 is
   BSD-3-Clause (LICENSE read: "Neither the name of the age project") and
   `filippo.io/hpke` v0.4.0 is BSD-3-Clause (LICENSE read).
@@ -224,6 +230,9 @@ packet parsing, key management and legacy ciphers we do not need for a single-re
   and a version bump; the file format does not depend on the library.
 
 ## Consequences
+- `golang.org/x/sys` v0.49.0 moves from indirect to direct in `go.mod` (T16): `internal/fsx`
+  uses `unix.Flock` and `windows.LockFileEx`/`UnlockFileEx` for the per-connector session
+  lock. Same version, BSD-3-Clause, `go.sum` unchanged, no new module.
 - `golang.org/x/crypto` moves from indirect to direct in `go.mod` (T14); `go.sum` already
   holds both v0.58.0 hashes (module and `go.mod`), so no new checksum is expected.
 - `internal/vault` (T14): `Seal(ctx, installID, id, key, plaintext)` /

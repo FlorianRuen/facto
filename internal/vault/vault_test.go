@@ -35,7 +35,9 @@
 //
 //	// Sealer seals with nonces read from an injected random source.
 //	type Sealer struct{ /* unexported */ }
-//	func NewSealer(rand io.Reader) *Sealer // production passes crypto/rand.Reader
+//	// NewSealer refuses a nil reader with ErrInvalidArgument (J1 T16, from the
+//	// T14 review) instead of panicking at the first Seal.
+//	func NewSealer(rand io.Reader) (*Sealer, error) // production passes crypto/rand.Reader
 //	func (s *Sealer) Seal(ctx context.Context, installID, id string, key Key, plaintext []byte) ([]byte, error)
 //
 //	// Seal is NewSealer(crypto/rand.Reader).Seal. It wipes plaintext after a
@@ -301,7 +303,7 @@ func TestSeal_GoldenV1(t *testing.T) {
 		t.Fatalf("golden file does not match the ADR 0009 v1 layout\n got: %x\nwant: %x", ind, golden)
 	}
 
-	s := vault.NewSealer(bytes.NewReader(nonce))
+	s := mustSealer(t, bytes.NewReader(nonce))
 	got, err := s.Seal(t.Context(), testInstall, testID, mustKey(t, fixedKeyBytes()), []byte(pt))
 	if err != nil {
 		t.Fatalf("Seal: %v", err)
@@ -514,7 +516,7 @@ func TestSeal_FreshNonce(t *testing.T) {
 	t.Run("nonce comes from the injected reader", func(t *testing.T) {
 		t.Parallel()
 		r := &sequenceReader{}
-		s := vault.NewSealer(r)
+		s := mustSealer(t, r)
 		var nonces [][]byte
 		for range 20 {
 			file, err := s.Seal(t.Context(), testInstall, testID, key, []byte("synthetic session"))
@@ -570,7 +572,7 @@ func TestSeal_RandFailureRefuses(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			file, err := vault.NewSealer(tc.r).Seal(t.Context(), testInstall, testID, key, []byte("synthetic session"))
+			file, err := mustSealer(t, tc.r).Seal(t.Context(), testInstall, testID, key, []byte("synthetic session"))
 			if err == nil {
 				t.Fatalf("Seal succeeded without a full random nonce")
 			}
