@@ -1,0 +1,31 @@
+name: config-perms
+description: >
+  Security negative. A group/world-readable config.yaml is a configuration
+  error (exit 2): nothing is collected, filed, indexed or reported, and the
+  inbox is left untouched.
+setup:
+  - path: config.yaml
+    mode: "0644"
+    content: |
+      output:
+        local: ~/Invoices
+      state_dir: ~/.facto
+      notify: none
+      manual:
+        - { id: edf, name: "EDF", category: housing }
+  - path: Invoices/inbox/2026-03-14_edf_invoice_84-12EUR_10234567.pdf
+    fixture: edf-invoice.pdf
+args: [collect, --config, "{{home}}/config.yaml", --year, "2026", --non-interactive]
+expect:
+  exit: 2
+  stdout:
+    empty: true
+  stderr:
+    contains: ["configuration error"]
+  absent:
+    - Invoices/2026
+    - .facto
+  files:
+    - path: Invoices/inbox/2026-03-14_edf_invoice_84-12EUR_10234567.pdf
+      mode: "0600"
+      fixture: edf-invoice.pdf

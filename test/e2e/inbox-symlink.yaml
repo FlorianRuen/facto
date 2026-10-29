@@ -1,0 +1,49 @@
+name: inbox-symlink
+description: >
+  Security negative (J0 T28/T30). Symlinks dropped in the inbox, to a file or
+  to a directory outside it, are never followed: they stay in place with a
+  not-regular warning, nothing is filed, and the secret they point to never
+  reaches the output folder, the state dir, stdout or stderr (canary).
+setup:
+  - path: config.yaml
+    content: |
+      output:
+        local: ~/Invoices
+      state_dir: ~/.facto
+      notify: none
+      manual:
+        - { id: edf, name: "EDF", category: housing }
+  - path: private/secret.txt
+    content: "{{canary:token}}\n"
+  - path: private/2026-03-14_edf_invoice.pdf
+    content: "synthetic {{canary:token}}\n"
+  - path: Invoices/inbox
+    dir: true
+  # A compliant name pointing outside the inbox: filed if it were followed.
+  - path: Invoices/inbox/2026-03-14_edf_invoice.pdf
+    symlink: ../../private/secret.txt
+  # A provider "subfolder" that is a link to a directory outside the inbox.
+  - path: Invoices/inbox/edf
+    symlink: ../../private
+args: [collect, --config, "{{home}}/config.yaml", --year, "2026", --non-interactive]
+expect:
+  exit: 0
+  stdout:
+    contains:
+      - "summary: no documents"
+      - "warnings: 2"
+      - "- not-regular inbox 2026-03-14_edf_invoice.pdf"
+      - "- not-regular inbox edf"
+  absent:
+    - Invoices/2026
+  files:
+    - path: private/secret.txt
+      mode: "0600"
+      content: "{{canary:token}}\n"
+  trees:
+    - path: Invoices
+      private: true
+      entries:
+        - inbox/
+        - inbox/2026-03-14_edf_invoice.pdf@
+        - inbox/edf@

@@ -160,7 +160,7 @@ facto/
 
 ## Connector model
 
-A connector does three things: open a session, list the documents of a period, download a document. Everything else (naming, dedup, destinations, secrets) belongs to the core. The split follows Woob's `CapDocument` model (subscription → document → download).
+A connector does three things: open a session, list the documents of a period, download a document. Everything else (naming, dedup, destinations, secrets) belongs to the core. The split follows Woob's `CapDocument` model (subscription → document → download). A connector must not start goroutines that can panic: the orchestrator recovers panics on its own goroutine only (the connector is marked `broken`), and a panic in a goroutine the connector started crashes the whole process.
 
 **Go interface.**
 
@@ -197,7 +197,7 @@ type DocumentRef struct {
 type Env struct {
     Secrets  SecretResolver // resolves bw://, keyring://… references
     Browser  BrowserPool    // headless or visible browser
-    HTTP     *http.Client   // persistent cookie jar, domain allowlist enforced
+    HTTP     *httpx.Client  // allowlisted, errors never carry the URL query
     Prompt   Prompter       // asks the user for an OTP code
     Log      *slog.Logger   // redacting handler
 }
@@ -221,6 +221,7 @@ type Env struct {
 | `broken` | The site changed (selector or endpoint not found) | Update the tool or drop PDFs in `inbox/` |
 | `auth_failed` | Credentials rejected | `facto config <id>` |
 | `rate_limited` | Too many requests or anti-bot block | Retry later |
+| `interrupted` | The run was canceled while the connector was running | Run `facto collect` again |
 
 **Declarative connectors.** For a service that exposes a real API (key, OAuth2 or JSON login), a YAML file is enough, with no recompilation. The engine can read an OpenAPI spec to validate paths and schemas.
 
@@ -383,7 +384,7 @@ v1 writes to a local folder. The simplest Drive option is to point that folder a
 
 | Option | Implementation | Pros | Cons |
 | --- | --- | --- | --- |
-| Local folder | Atomic write (temp file then rename) | No dependency | No remote copy |
+| Local folder | Atomic write (temp file, hard link (never replaces), remove temp; the output folder must support hard links (checked at startup)) | No dependency | No remote copy |
 | Google Drive for desktop folder | `output: ~/Google Drive/My Drive/Invoices` | Zero OAuth code, already reliable | Needs the Drive client installed (no official Linux client) |
 | Native Drive API v3 | Desktop OAuth + `drive.file` | Works everywhere, including scheduled runs on a home server | OAuth client and token handling |
 
@@ -585,7 +586,7 @@ notify: desktop             # desktop, none
 | `facto schedule monthly \| off` | Install or remove the scheduled task |
 | `facto record <url>` | Record a cleaned HAR to write a connector |
 
-Exit codes: `0` all ok, `1` at least one connector in `needs_login` or `broken`, `2` configuration error. Useful for scripts.
+Exit codes: `0` all ok, `1` at least one connector in `needs_login`, `broken`, `auth_failed`, `rate_limited` or `interrupted` (or the run itself failed or was canceled), `2` configuration or usage error (invalid `config.yaml`, unknown command or flag). Useful for scripts.
 
 **Scheduling per OS.**
 

@@ -1,0 +1,12 @@
+output.local = "$HOME/Documents/Invoices"
+output.gdrive.enabled = false
+output.gdrive.root = "Invoices"
+naming.file = "{date:2006-01-02}_{provider}_{kind}[_{amount}][_{ref}]"
+naming.dir = "{year}/{category}/{provider}"
+naming.language = "en"
+secrets.default = "bitwarden"
+sessions = "persistent"
+state_dir = "$HOME/.facto"
+notify = "desktop"
+connectors.count = 0
+manual.count = 0

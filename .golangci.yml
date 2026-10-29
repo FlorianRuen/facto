@@ -1,6 +1,8 @@
 version: "2"
 run:
   timeout: 5m
+  # Lint the E2E harness (test/e2e, //go:build e2e) too.
+  build-tags: [e2e]
 linters:
   default: standard
   enable:
@@ -27,20 +29,66 @@ linters:
           msg: "use internal/httpx (domain allowlist)"
         - pattern: '^os\.(WriteFile|Create|OpenFile|MkdirAll)$'
           msg: "use internal/fsx (permissions, atomic writes, SafeName)"
+        # SEC-J0-16: every other file-system mutation. Tests may use these to
+        # build hostile fixtures (symlinks, unreadable files): see exclusions.
+        - pattern: '^os\.(Mkdir|MkdirTemp|CreateTemp|Rename|Remove|RemoveAll|Symlink|Link|Chmod|Chown|Lchown|Chtimes|Truncate)$'
+          msg: "fs mutation outside internal/fsx: use internal/fsx"
         - pattern: '^time\.Now$'
           msg: "inject clock.Clock"
     depguard:
       rules:
         main:
           deny:
-            - pkg: "log"
+            - pkg: "log$"
               desc: "use log/slog through Env.Log"
             - pkg: "math/rand"
               desc: "use crypto/rand"
+            - pkg: "io/ioutil"
+              desc: "deprecated; files only through internal/fsx (CLAUDE.md rule 5)"
+        # CLAUDE.md rule 5 (SEC-J0-15): network I/O only through internal/httpx
+        # (domain allowlist, TLS, redirect checks). Applies to every
+        # production file, cmd/ and connectors/ included. Same list as
+        # internal/httpx/boundary_test.go. Parsing-only packages (net/url,
+        # net/netip, net/mail) stay allowed. Test files are out of scope:
+        # they run httptest servers and fake listeners. cgo (import "C") is
+        # denied by boundary_test.go only: depguard never sees that import.
+        network:
+          files:
+            - "$all"
+            - "!$test"
+            - "!**/internal/httpx/**"
+            # Names net/http and crypto/tls types with reflect so the
+            # redacting logger fails closed on them; no I/O.
+            - "!**/internal/logx/walk.go"
+          deny:
+            - pkg: "net$"
+              desc: "network I/O only through internal/httpx (CLAUDE.md rule 5)"
+            - pkg: "net/http"
+              desc: "use internal/httpx (domain allowlist)"
+            - pkg: "net/rpc"
+              desc: "network I/O only through internal/httpx (CLAUDE.md rule 5)"
+            - pkg: "net/smtp"
+              desc: "network I/O only through internal/httpx (CLAUDE.md rule 5)"
+            - pkg: "net/textproto"
+              desc: "network I/O only through internal/httpx (CLAUDE.md rule 5)"
+            - pkg: "crypto/tls"
+              desc: "TLS is configured by internal/httpx only"
+            - pkg: "golang.org/x/net"
+              desc: "network I/O only through internal/httpx (CLAUDE.md rule 5)"
+            - pkg: "google.golang.org/grpc"
+              desc: "network I/O only through internal/httpx (CLAUDE.md rule 5)"
   exclusions:
     rules:
-      - path: '^(cmd/|internal/fsx/|internal/httpx/|internal/clock/)'
+      - path: '^(internal/fsx/|internal/httpx/|internal/clock/)'
         linters: [forbidigo]
+      # cmd/ is the CLI: it prints to stdout/stderr. Every other forbidigo
+      # rule (httpx, fsx, clock) applies to it (SEC-J0-15, SEC-J0-16).
+      - path: '^cmd/'
+        linters: [forbidigo]
+        text: 'use the injected slog logger'
+      - path: '_test\.go$'
+        linters: [forbidigo]
+        text: 'fs mutation outside internal/fsx'
       - path: '_test\.go$'
         linters: [wrapcheck]
 formatters:

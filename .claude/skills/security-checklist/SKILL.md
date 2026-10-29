@@ -11,7 +11,7 @@ compromised dependencies. Root on the machine is out of scope.
 
 ## Secrets
 - [ ] Config holds references (`bw://uuid/field`, `keyring://…`), never values.
-- [ ] Values live in `secrets.Secret`; exposed only at the last call site; wiped after use.
+- [ ] Values live in `secret.Secret`; exposed only at the last call site; wiped after use.
 - [ ] Bitwarden: items by UUID, `--passwordenv` only in the subprocess env, `bw lock` in a `defer`, never `bw serve`.
 - [ ] No secret in argv, global env, URL, error message, panic, report.
 

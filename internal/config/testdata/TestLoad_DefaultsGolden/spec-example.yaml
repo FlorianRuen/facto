@@ -1,0 +1,32 @@
+# Synthetic config following the docs/spec.md "Configuration" example, with
+# the secret references of "Password managers" (synthetic Bitwarden item id).
+output:
+  local: ~/Documents/Invoices
+  gdrive:
+    enabled: true
+    root: Invoices
+naming:
+  file: "{date:2006-01-02}_{provider}_{kind}[_{amount}][_{ref}]"
+  dir: "{year}/{category}/{provider}"
+  language: en              # en, fr (kind labels)
+secrets:
+  default: bitwarden        # keyring, bitwarden; see Security
+sessions: persistent        # or ephemeral
+connectors:
+  ileo:
+    enabled: true
+    category: housing
+    login: keyring://facto/ileo/login
+    password: keyring://facto/ileo/password
+  edf:
+    enabled: true
+    category: housing
+    login: bw://3f2a9c1e-5b7d-4e8a-9c21-7d4e5f6a8b90/username
+    password: bw://3f2a9c1e-5b7d-4e8a-9c21-7d4e5f6a8b90/password
+    otp: bw://3f2a9c1e-5b7d-4e8a-9c21-7d4e5f6a8b90/totp
+  bouyguestelecom: { enabled: true,  category: internet }
+  wecasa:          { enabled: false, category: services }
+  cooloc:          { enabled: false, category: housing }
+manual:
+  - { id: impots, name: "Impôts", category: housing, reminder: "10-01" }
+notify: desktop             # desktop, none

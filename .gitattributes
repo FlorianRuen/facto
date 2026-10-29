@@ -1,0 +1,15 @@
+# Check out every text file with LF, on every OS. Golden files, fixtures
+# and generated reports are compared byte for byte, and Windows runners
+# (core.autocrlf=true) would otherwise turn them into CRLF.
+* text=auto eol=lf
+
+# Binary fixtures: never convert line endings. Synthetic PDFs are ASCII
+# and look like text to git, but their xref tables hold byte offsets.
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.db binary
+*.sqlite binary
+*.zip binary
+*.gz binary

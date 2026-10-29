@@ -1,0 +1,13 @@
+# Synthetic partial config: every key not set here comes from the defaults.
+output:
+  local: ~/Factures
+naming:
+  language: fr
+sessions: ephemeral
+state_dir: ~/facto-state
+connectors:
+  fakeprovider:
+    enabled: true
+    category: services
+    login: keyring://facto/fakeprovider/login
+    password: keyring://facto/fakeprovider/password
