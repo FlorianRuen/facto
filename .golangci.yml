@@ -3,6 +3,9 @@ run:
   timeout: 5m
   # Lint the E2E harness (test/e2e, //go:build e2e) too.
   build-tags: [e2e]
+  # Concurrent runs (several worktrees, make verify + lint-selftest) wait for
+  # the lock instead of failing with "parallel golangci-lint is running".
+  allow-serial-runners: true
 linters:
   default: standard
   enable:
