@@ -73,6 +73,17 @@ func envMap(kvs []string) map[string]string {
 	return m
 }
 
+// countKey returns how many KEY=VALUE entries of kvs are named key.
+func countKey(kvs []string, key string) int {
+	n := 0
+	for _, kv := range kvs {
+		if k, _, _ := strings.Cut(kv, "="); k == key {
+			n++
+		}
+	}
+	return n
+}
+
 // Not parallel: t.Setenv.
 func TestExecRunner_MinimalEnvironment(t *testing.T) {
 	t.Setenv("BW_SESSION", "synthetic-parent-session")
@@ -107,7 +118,9 @@ func TestExecRunner_MinimalEnvironment(t *testing.T) {
 			t.Errorf("subprocess %s = %q, want %q", k, got, want)
 		}
 	}
-	if n := strings.Count(strings.Join(rep.Env, "\n"), "HOME="); n != 1 {
+	// Count entries named exactly HOME: a substring count would also match
+	// inherited XDG_CONFIG_HOME=, which GitHub runners set.
+	if n := countKey(rep.Env, "HOME"); n != 1 {
 		t.Errorf("HOME set %d times, want 1", n)
 	}
 	// The parent environment is untouched.
