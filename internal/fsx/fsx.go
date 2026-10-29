@@ -353,7 +353,7 @@ func (r *Root) AppendPrivate(name string, data []byte) (err error) {
 	if err != nil {
 		return err
 	}
-	f, err := r.root.OpenFile(osName, os.O_WRONLY|os.O_APPEND|os.O_CREATE|nonBlock, filePerm)
+	f, err := r.openAppend(osName)
 	if err != nil {
 		return fmt.Errorf("fsx append %q: %w", name, err)
 	}
@@ -376,6 +376,28 @@ func (r *Root) AppendPrivate(name string, data []byte) (err error) {
 		return fmt.Errorf("fsx append %q: %w", name, err)
 	}
 	return nil
+}
+
+// appendCreateAttempts bounds openAppend's retries on fs.ErrNotExist.
+const appendCreateAttempts = 3
+
+// openAppend opens osName for appending, creating it 0600 if missing. macOS
+// (APFS) can fail openat(O_CREAT) with ENOENT when another thread or process
+// creates the same name at the same moment; the call is retried a few times.
+// A parent that is really missing still fails with fs.ErrNotExist.
+func (r *Root) openAppend(osName string) (*os.File, error) {
+	var err error
+	for range appendCreateAttempts {
+		var f *os.File
+		f, err = r.root.OpenFile(osName, os.O_WRONLY|os.O_APPEND|os.O_CREATE|nonBlock, filePerm)
+		if err == nil {
+			return f, nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			break
+		}
+	}
+	return nil, fmt.Errorf("open: %w", err)
 }
 
 // Remove removes a file or an empty directory. A missing name wraps

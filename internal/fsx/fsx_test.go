@@ -416,6 +416,36 @@ func TestAppendPrivate_AppendsAndCreates(t *testing.T) {
 	}
 }
 
+// TestAppendPrivate_ConcurrentCreate proves concurrent first appends to the
+// same missing file all succeed and never interleave. On macOS, openat with
+// O_CREAT may spuriously fail with ENOENT while another writer creates the
+// same name; AppendPrivate must absorb that.
+func TestAppendPrivate_ConcurrentCreate(t *testing.T) {
+	t.Parallel()
+
+	const rounds, writers = 20, 8
+	for round := range rounds {
+		r, dir := openRoot(t)
+		name := fmt.Sprintf("race-%d.log", round)
+		errs := make(chan error, writers)
+		var wg sync.WaitGroup
+		for w := range writers {
+			wg.Go(func() { errs <- r.AppendPrivate(name, []byte(fmt.Sprintf("writer %d\n", w))) })
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatalf("round %d: AppendPrivate: %v", round, err)
+			}
+		}
+		lines := strings.Split(strings.TrimSuffix(string(readFile(t, filepath.Join(dir, name))), "\n"), "\n")
+		if len(lines) != writers {
+			t.Fatalf("round %d: %d lines, want %d: %q", round, len(lines), writers, lines)
+		}
+	}
+}
+
 func TestAppendPrivate_Errors(t *testing.T) {
 	t.Parallel()
 
