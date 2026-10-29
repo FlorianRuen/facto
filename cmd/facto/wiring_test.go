@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -113,17 +114,23 @@ func TestConfigPathFor(t *testing.T) {
 	vars := func(m map[string]string) func(string) (string, bool) {
 		return func(k string) (string, bool) { v, ok := m[k]; return v, ok }
 	}
-	const home = "/home/synthetic"
+	// Synthetic absolute paths for the OS running the test: configPathFor
+	// requires filepath.IsAbs, and on Windows "/home" has no drive letter.
+	abs := filepath.FromSlash
+	if runtime.GOOS == "windows" {
+		abs = func(p string) string { return `C:` + filepath.FromSlash(p) }
+	}
+	home := abs("/home/synthetic")
 	for _, tc := range []struct {
 		name, goos, home string
 		env              map[string]string
 		want             string // "" = error
 	}{
 		{name: "linux default", goos: "linux", home: home, want: filepath.Join(home, ".config", "facto", "config.yaml")},
-		{name: "linux xdg", goos: "linux", home: home, env: map[string]string{"XDG_CONFIG_HOME": "/xdg"}, want: filepath.Join("/xdg", "facto", "config.yaml")},
+		{name: "linux xdg", goos: "linux", home: home, env: map[string]string{"XDG_CONFIG_HOME": abs("/xdg")}, want: filepath.Join(abs("/xdg"), "facto", "config.yaml")},
 		{name: "linux relative xdg ignored", goos: "linux", home: home, env: map[string]string{"XDG_CONFIG_HOME": "rel"}, want: filepath.Join(home, ".config", "facto", "config.yaml")},
 		{name: "darwin", goos: "darwin", home: home, want: filepath.Join(home, "Library", "Application Support", "facto", "config.yaml")},
-		{name: "windows appdata", goos: "windows", home: home, env: map[string]string{"APPDATA": "/appdata"}, want: filepath.Join("/appdata", "facto", "config.yaml")},
+		{name: "windows appdata", goos: "windows", home: home, env: map[string]string{"APPDATA": abs("/appdata")}, want: filepath.Join(abs("/appdata"), "facto", "config.yaml")},
 		{name: "windows default", goos: "windows", home: home, want: filepath.Join(home, "AppData", "Roaming", "facto", "config.yaml")},
 		{name: "no home", goos: "linux"},
 		{name: "relative home", goos: "darwin", home: "rel"},
