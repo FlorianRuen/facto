@@ -36,7 +36,14 @@ websites themselves.
 ### Domain allowlist (`internal/httpx`)
 
 `internal/httpx` is the only package that does network I/O. Each client is built
-from one allowlist.
+from one allowlist. This is enforced repo-wide (SEC-J0-15), `cmd/` and
+`connectors/` included: the depguard `network` rule in `.golangci.yml` and
+`internal/httpx/boundary_test.go` both refuse a production import of `net`,
+`net/http/...`, `net/rpc`, `net/smtp`, `net/textproto`, `crypto/tls`,
+`golang.org/x/net` or gRPC outside `internal/httpx`. The one exception is
+`internal/logx/walk.go`, which names `net/http` and `crypto/tls` types for
+redaction and does no I/O. Test files are not covered (they run `httptest`
+servers).
 
 - **Entries** are an exact host (`api.example.com`) or `*.` plus a host
   (`*.example.com`). A wildcard matches subdomains only, not the bare host.
