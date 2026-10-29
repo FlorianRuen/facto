@@ -41,6 +41,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -204,7 +205,8 @@ func TestProbeLink_UnsupportedIsErrLinkUnsupported(t *testing.T) {
 			if !errors.Is(err, ErrLinkUnsupported) {
 				t.Fatalf("ProbeLink error = %v, want ErrLinkUnsupported", err)
 			}
-			if !strings.Contains(err.Error(), dir) {
+			// %q-quoted: on Windows the backslashes are escaped.
+			if !strings.Contains(err.Error(), strconv.Quote(dir)) {
 				t.Errorf("error %q does not name the directory %q", err, dir)
 			}
 			if after := dirEntries(t, dir); !slices.Equal(after, before) {

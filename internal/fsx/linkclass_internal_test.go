@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -95,7 +96,9 @@ func TestProbeLink_NonLinkFailuresKeepTheirError(t *testing.T) {
 			if !errors.Is(err, tt.err) {
 				t.Errorf("ProbeLink error = %v, want it to wrap the original %v", err, tt.err)
 			}
-			if msg := err.Error(); !strings.Contains(msg, "fsx probe link") || !strings.Contains(msg, dir) {
+			// The directory is quoted with %q: on Windows its backslashes are
+			// escaped, so look for the quoted form.
+			if msg := err.Error(); !strings.Contains(msg, "fsx probe link") || !strings.Contains(msg, strconv.Quote(dir)) {
 				t.Errorf("error %q must keep the fsx context and name %q", msg, dir)
 			}
 			if after := dirEntries(t, dir); !slices.Equal(after, before) {
