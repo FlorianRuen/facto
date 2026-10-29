@@ -195,13 +195,29 @@ type DocumentRef struct {
 }
 
 type Env struct {
-    Secrets  SecretResolver // resolves bw://, keyring://… references
-    Browser  BrowserPool    // headless or visible browser
-    HTTP     *httpx.Client  // allowlisted, errors never carry the URL query
-    Prompt   Prompter       // asks the user for an OTP code
-    Log      *slog.Logger   // redacting handler
+    Secrets     SecretResolver // resolves bw://, keyring://… references
+    Browser     BrowserPool    // headless or visible browser
+    HTTP        *httpx.Client  // allowlisted, errors never carry the URL query
+    Prompt      Prompter       // asks the user for an OTP code
+    Log         *slog.Logger   // redacting handler
+    Saved       secret.Secret  // restored session blob; zero when none
+    Credentials Credentials    // secret references (bw://…), never values
+    Interactive bool           // single source of truth; Prompt.Interactive() matches it
+}
+
+// Optional: a Session that implements Persistable is saved encrypted after a
+// successful login and handed back as Env.Saved on the next run.
+type Persistable interface {
+    Persist(ctx context.Context) (secret.Secret, error)
 }
 ```
+
+`SecretResolver.Resolve(ctx, ref)` and `Prompter.Prompt(ctx, PromptRequest)`
+return `secret.Secret`; `BrowserPool.Launch` returns a library-neutral `Browser`
+(`Navigate`, `WaitVisible`, `TypeSecret`, `Click`, `CurrentURL`, `Cookies`,
+`Close`) whose cookie values are `secret.Secret`. A prompt label may come from
+the supplier site: Prompters display `PromptRequest.CleanLabel()` (escape
+sequences and control characters removed, tokens masked, 128 bytes max).
 
 **Run lifecycle.**
 

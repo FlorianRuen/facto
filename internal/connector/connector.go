@@ -15,6 +15,7 @@ import (
 
 	"github.com/FlorianRuen/facto/internal/clock"
 	"github.com/FlorianRuen/facto/internal/httpx"
+	"github.com/FlorianRuen/facto/internal/secret"
 )
 
 // Sentinels the orchestrator maps to a connector state (errors.Is).
@@ -54,8 +55,9 @@ type Connector interface {
 	Fetch(ctx context.Context, s Session, ref DocumentRef) (io.ReadCloser, error)
 }
 
-// Session is opaque connector state returned by Login. It has no methods in
-// J0 (any connector value satisfies it); persistence comes with internal/vault.
+// Session is opaque connector state returned by Login. A session that also
+// implements Persistable is saved encrypted by the orchestrator after a
+// successful login; any other value is never saved.
 type Session any
 
 // Info is a connector's static metadata.
@@ -95,24 +97,21 @@ type DocumentRef struct {
 // *url.Error that carries the full URL, query included.
 type Env struct {
 	Secrets SecretResolver // resolves bw://, keyring://… references
-	Browser BrowserPool    // headless or visible browser
+	Browser BrowserPool    // headless or visible browser, login only
 	HTTP    *httpx.Client  // allowlisted, errors never carry the URL query
 	Prompt  Prompter       // asks the user for an OTP code
 	Log     *slog.Logger   // redacting handler
+	// Saved is the session blob a previous Persist returned, restored by the
+	// orchestrator; zero (IsZero) when there is none.
+	Saved secret.Secret
+	// Credentials holds the configured secret references for this connector.
+	Credentials Credentials
+	// Interactive reports whether a user can answer prompts and see a
+	// visible browser during this run. It is the single source of truth: the
+	// core builds Prompt from the same value, so Prompt.Interactive() always
+	// equals it. Connectors decide on Env.Interactive.
+	Interactive bool
 }
-
-// SecretResolver resolves secret references for a connector. Placeholder: it
-// gains Resolve(ctx, ref string) (secret.Secret, error) when internal/secret
-// lands (J0 T10).
-type SecretResolver any
-
-// Prompter asks the interactive user for input such as an OTP code.
-// Placeholder: its method set comes with the first interactive caller.
-type Prompter any
-
-// BrowserPool hands out browsers for interactive logins. Placeholder until
-// internal/browser exists.
-type BrowserPool any
 
 // Period is the half-open UTC interval [Start, End).
 type Period struct {
