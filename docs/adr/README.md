@@ -19,6 +19,7 @@ module cache; anything not checked that way is marked "unverified".
 | [0005](0005-go-keyring.md) | OS keyring: `zalando/go-keyring` | Accepted |
 | [0006](0006-pdfcpu.md) | Factur-X PDF attachments: `pdfcpu` | Accepted |
 | [0007](0007-j0-product-decisions.md) | J0 product decisions (spec gaps) | Accepted |
+| [0008](0008-browser-cdp-pipe.md) | Browser library: in-house CDP client over a pipe | Accepted |
 | [0009](0009-vault-aead.md) | Session vault: XChaCha20-Poly1305, key per connector in the OS keyring | Accepted |
 
 ## Template
