@@ -82,6 +82,20 @@ linters:
               desc: "network I/O only through internal/httpx (CLAUDE.md rule 5)"
             - pkg: "google.golang.org/grpc"
               desc: "network I/O only through internal/httpx (CLAUDE.md rule 5)"
+        # ADR 0008 "Windows (A4)", plan J1 Q1/T7.1: the loopback-only CDP
+        # WebSocket client may be imported by internal/browser only (and by
+        # its own package; the rest of internal/httpx is denied too). Test
+        # files are covered too. Backed by
+        # internal/httpx/cdploopback/callers_test.go (renamed imports,
+        # build-tagged files). Proven live by make lint-selftest.
+        cdploopback:
+          files:
+            - "$all"
+            - "!**/internal/browser/**"
+            - "!**/internal/httpx/cdploopback/**"
+          deny:
+            - pkg: "github.com/FlorianRuen/facto/internal/httpx/cdploopback"
+              desc: "loopback CDP client is reserved to internal/browser (ADR 0008, Windows A4)"
   exclusions:
     rules:
       - path: '^(internal/fsx/|internal/httpx/|internal/clock/)'

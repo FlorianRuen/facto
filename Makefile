@@ -7,6 +7,9 @@ export FACTO_CANARY := 1
 export CANARY_FILE := $(CURDIR)/.cache/canaries.txt
 export ART_DIR := $(CURDIR)/.cache/test-artifacts
 
+# lint-selftest creates in-tree fixtures that race/lint must not see: never run targets in parallel.
+.NOTPARALLEL:
+
 .PHONY: verify fmt-check lint lint-selftest test race cover e2e leakcheck audit score-check tools lint-actions release-check
 
 # goreleaser runs from its pinned image (ADR 0001) so its dependencies stay out
@@ -29,9 +32,13 @@ fmt-check:
 lint:
 	golangci-lint run
 
-# Proves the depguard ban on golang.org/x/crypto/openpgp (ADR 0009) is live,
-# in production and test files, by linting a throwaway module built under
-# .cache/lint-selftest/ from the module cache only (GOPROXY=off).
+# Proves two depguard rules are live, in production and test files:
+# - the ban on golang.org/x/crypto/openpgp (ADR 0009), by linting a throwaway
+#   module built under .cache/lint-selftest/ from the module cache only
+#   (GOPROXY=off);
+# - rule cdploopback (ADR 0008, J1 T7.1), by linting temporary in-tree fixtures
+#   (gitignored, removed on exit): internal/browser lints clean, imports from
+#   internal/httpx and other packages are rejected.
 lint-selftest:
 	GOLANGCI_LINT=golangci-lint GO=$(GO) ./scripts/lint-selftest.sh
 

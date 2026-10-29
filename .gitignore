@@ -3,3 +3,8 @@ dist/
 *.har.raw
 .facto/
 .claude/worktrees/
+# make lint-selftest in-tree fixtures (removed by its EXIT trap; never commit)
+/internal/lintselftest_cdp/
+/internal/lintselftest_cdptest/
+/internal/browser/zz_lintselftest_cdp.go
+/internal/httpx/zz_lintselftest_cdp.go
