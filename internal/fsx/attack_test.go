@@ -376,3 +376,75 @@ func TestAttack_FsxWriteNewRaceHasOneWinner(t *testing.T) {
 		t.Errorf("leftover entries: %d", len(des))
 	}
 }
+
+// TestAttack_FsxRemoveTreePlantedSymlinkToHome: a hostile page or process
+// plants symlinks to the user's home inside a disposable browser profile (or
+// replaces the profile itself with one). Tearing the profile down must
+// delete the links, never what they point to. The "home" is a synthetic dir
+// in t.TempDir().
+func TestAttack_FsxRemoveTreePlantedSymlinkToHome(t *testing.T) {
+	t.Parallel()
+	homeTree := []string{"home/private/key.txt", "home/Documents/invoice.pdf", "home/notes.txt"}
+	homeIntact := func(t *testing.T, home string) {
+		t.Helper()
+		for _, rel := range homeTree {
+			p := filepath.Join(home, filepath.FromSlash(strings.TrimPrefix(rel, "home/")))
+			if b, err := os.ReadFile(filepath.Clean(p)); err != nil || string(b) != "synthetic" {
+				t.Errorf("fake home file %s damaged: %q %v", rel, b, err)
+			}
+		}
+		if got := strings.Join(entries(t, home), "|"); got != "Documents|notes.txt|private" {
+			t.Errorf("fake home entries changed: %q", got)
+		}
+	}
+	tests := []struct {
+		name    string
+		plant   func(t *testing.T, home, profile string)
+		wantErr error
+	}{
+		{
+			name: "links to home inside the profile",
+			plant: func(t *testing.T, home, profile string) {
+				buildTree(t, profile, []string{"Default/Cache/data_0"})
+				mustSymlink(t, home, filepath.Join(profile, "Default", "home"))
+				mustSymlink(t, filepath.Join(home, "private"), filepath.Join(profile, "Default", "Cache", "priv"))
+				mustSymlink(t, filepath.Join(home, "private", "key.txt"), filepath.Join(profile, "Default", "Cookies"))
+				mustSymlink(t, "../../../../home", filepath.Join(profile, "Default", "rel"))
+			},
+		},
+		{
+			name: "profile root replaced by a link to home",
+			plant: func(t *testing.T, home, profile string) {
+				if err := os.Remove(profile); err != nil {
+					t.Fatal(err)
+				}
+				mustSymlink(t, home, profile)
+			},
+			wantErr: fsx.ErrNotDir,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			base := t.TempDir()
+			buildTree(t, base, append([]string{"run/facto/"}, homeTree...))
+			home := filepath.Join(base, "home")
+			parent := filepath.Join(base, "run", "facto")
+			profile, err := fsx.MkdirTempPrivate(parent, "facto-profile-*")
+			if err != nil {
+				t.Fatalf("MkdirTempPrivate: %v", err)
+			}
+			tc.plant(t, home, profile)
+			err = fsx.RemoveTree(parent, filepath.Base(profile))
+			if tc.wantErr == nil {
+				if err != nil {
+					t.Fatalf("RemoveTree: %v", err)
+				}
+				assertAbsent(t, profile)
+			} else if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("RemoveTree = %v, want errors.Is %v", err, tc.wantErr)
+			}
+			homeIntact(t, home)
+		})
+	}
+}
