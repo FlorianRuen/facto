@@ -1,0 +1,23 @@
+{
+  "invoices": [
+    {
+      "id": "FP-2025-0001",
+      "contract": "CTR-0001",
+      "issued_at": "2025-01-15",
+      "period_start": "2024-12-01",
+      "period_end": "2024-12-31",
+      "amount_cents": 4599,
+      "currency": "EUR"
+    },
+    {
+      "id": "FP-2025-0002",
+      "contract": "CTR-0001",
+      "issued_at": "2025-02-15",
+      "period_start": "2025-01-01",
+      "period_end": "2025-01-31",
+      "amount_cents": 0,
+      "currency": "EUR"
+    }
+  ],
+  "next_page": 2
+}

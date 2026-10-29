@@ -19,12 +19,12 @@ mobile receipt capture come in later milestones (J1 to J4).
 
 ### Connectors
 
-No connector is implemented yet. Connector sheets will live in
-[`docs/connectors/`](docs/connectors/); only the template exists today.
+No supplier connector is implemented yet. Connector sheets live in
+[`docs/connectors/`](docs/connectors/).
 
 | Connector | Status |
 | --- | --- |
-| (none yet) | |
+| [`fakeprovider`](docs/connectors/fakeprovider.md) (test only, e2e builds) | beta: HTTP side (list, fetch, persist, probe); login in progress |
 
 ## Install
 
@@ -374,6 +374,7 @@ The Makefile is the only entry point:
 | `make score-check` | Fails if `security/score.json` is missing, stale or under the gate |
 
 `make e2e` needs Docker: it starts a pinned Vaultwarden container, then runs
-the scenarios in `test/e2e/`. `connectors/fakeprovider` does not exist yet; the
-J0 scenarios drive the `inbox` and the configuration checks. See
+the scenarios in `test/e2e/`. `connectors/fakeprovider` has its HTTP side
+(list, fetch, persist, probe); its login flows and the e2e fake site are still
+to come, so the scenarios drive the `inbox` and the configuration checks. See
 [`CONTRIBUTING.md`](CONTRIBUTING.md#end-to-end-tests).

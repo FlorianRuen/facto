@@ -1,0 +1,10 @@
+{
+  "invoices": [
+    {
+      "id": "FP-2025-0003",
+      "contract": "CTR-0002",
+      "issued_at": "2025-12-31"
+    }
+  ],
+  "next_page": null
+}
