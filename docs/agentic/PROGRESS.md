@@ -88,3 +88,5 @@ Format: `YYYY-MM-DD <milestone> <task> <done|BLOCKED(Hn)|NEEDS(Hn)>: <one line> 
 2026-10-29 J1 T5 done: connector Env interfaces (SecretResolver, Prompter, BrowserPool/Browser, Cookie as secret, Credentials refs, Env.Saved/Interactive, Persistable on Session), CleanLabel strips CSI/OSC/DCS/SOS/PM/APC; connector 100%; review PASS after %s render case added
 2026-10-29 J1 T4 done: fsx MkdirTempPrivate (0700, os.Root, private parent) + RemoveTree (os.Root.RemoveAll, never follows symlinks, swap race pinned: link unlinked, target intact); fsx 90.3%; review PASS after restoring the a*b* case
 2026-10-29 J1 process: test-writers now save a patch snapshot at handoff; two 'dropped test case' disputes (T4, T5) could not be settled from transcripts alone
+2026-10-29 J1 T3 done: depguard rule main denies golang.org/x/crypto/openpgp in all files incl. tests (ADR 0009); scripts/lint-selftest.sh runs in make verify and is proven non-vacuous (rule removed, tests excluded, empty module cache: each exits 1)
+BLOCKED(H1): add `go mod download && make lint-selftest` to the ci.yml lint job (T31); CI never runs make verify

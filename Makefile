@@ -7,7 +7,7 @@ export FACTO_CANARY := 1
 export CANARY_FILE := $(CURDIR)/.cache/canaries.txt
 export ART_DIR := $(CURDIR)/.cache/test-artifacts
 
-.PHONY: verify fmt-check lint test race cover e2e leakcheck audit score-check tools lint-actions release-check
+.PHONY: verify fmt-check lint lint-selftest test race cover e2e leakcheck audit score-check tools lint-actions release-check
 
 # goreleaser runs from its pinned image (ADR 0001) so its dependencies stay out
 # of tools/go.mod and the osv-scanner scope.
@@ -20,7 +20,7 @@ GORELEASER_RUN := -e HOME=/tmp -e GOFLAGS=-mod=readonly -e GOTOOLCHAIN=go$(shell
 	-e GOPROXY=file:///hostmod/cache/download -e GOSUMDB=off -e GOMODCACHE=/tmp/gomod \
 	-v $(shell $(GO) env GOMODCACHE):/hostmod:ro -v $(CURDIR):/src:ro
 
-verify: fmt-check lint race cover leakcheck ## everything required before a commit
+verify: fmt-check lint lint-selftest race cover leakcheck ## everything required before a commit
 	@echo "verify: ok"
 
 fmt-check:
@@ -28,6 +28,12 @@ fmt-check:
 
 lint:
 	golangci-lint run
+
+# Proves the depguard ban on golang.org/x/crypto/openpgp (ADR 0009) is live,
+# in production and test files, by linting a throwaway module built under
+# .cache/lint-selftest/ from the module cache only (GOPROXY=off).
+lint-selftest:
+	GOLANGCI_LINT=golangci-lint GO=$(GO) ./scripts/lint-selftest.sh
 
 lint-actions:
 	actionlint

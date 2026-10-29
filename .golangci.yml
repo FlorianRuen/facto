@@ -45,6 +45,11 @@ linters:
               desc: "use crypto/rand"
             - pkg: "io/ioutil"
               desc: "deprecated; files only through internal/fsx (CLAUDE.md rule 5)"
+            # ADR 0009: unsafe by design, unmaintained (GO-2026-5932). Rule
+            # main has no files list, so tests are covered too. Proven live
+            # by make lint-selftest.
+            - pkg: "golang.org/x/crypto/openpgp"
+              desc: "banned by ADR 0009 (unsafe, unmaintained, GO-2026-5932); sessions use x/crypto/chacha20poly1305 via internal/vault"
         # CLAUDE.md rule 5 (SEC-J0-15): network I/O only through internal/httpx
         # (domain allowlist, TLS, redirect checks). Applies to every
         # production file, cmd/ and connectors/ included. Same list as
