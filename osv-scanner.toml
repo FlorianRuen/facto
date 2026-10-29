@@ -1,0 +1,4 @@
+[[IgnoredVulns]]
+id = "GO-2026-5932"
+ignoreUntil = 2027-01-31T00:00:00Z
+reason = "Advisory covers golang.org/x/crypto/openpgp/* only. Neither facto nor its pinned dev tools (tools/go.mod) compile any openpgp package (checked with go list -deps); facto uses x/crypto only for pdfcpu's ocsp, and session encryption (J1) uses chacha20poly1305/age. Flagged because osv-scanner's call analysis fails on tools/go.mod."

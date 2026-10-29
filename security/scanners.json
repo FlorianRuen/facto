@@ -2,5 +2,5 @@
   "gitleaks": "pass",
   "gosec": "pass",
   "govulncheck": "pass",
-  "osv-scanner": "fail"
+  "osv-scanner": "pass"
 }

@@ -1,8 +1,8 @@
 {
-  "date": "2026-10-28",
+  "date": "2026-10-29",
   "milestone": "J0",
-  "commit": "68d98fd78978c5f74204983adcec563f363e2489",
-  "total": 84,
+  "commit": "8c1a85f707d05d85d4b962ce0a6f183f15b45646",
+  "total": 88,
   "categories": [
     {
       "id": 1,
@@ -26,13 +26,13 @@
       "id": 4,
       "name": "Logging and redaction",
       "max": 10,
-      "score": 8
+      "score": 9
     },
     {
       "id": 5,
       "name": "Network boundary",
       "max": 10,
-      "score": 8
+      "score": 9
     },
     {
       "id": 6,
@@ -50,7 +50,7 @@
       "id": 8,
       "name": "Dependencies and build",
       "max": 10,
-      "score": 5
+      "score": 7
     },
     {
       "id": 9,
@@ -158,36 +158,40 @@
       "id": "SEC-J0-12",
       "category": 8,
       "severity": "medium",
-      "location": "tools/go.mod:169 (github.com/nwaples/rardecode/v2 v2.1.0), tools/go.mod:253 and go.mod:27 (golang.org/x/crypto v0.58.0)",
-      "status": "open"
+      "location": "tools/go.mod (mholt/archives v0.1.5, nwaples/rardecode/v2 v2.2.0), osv-scanner.toml (GO-2026-5932 ignored until 2027-01-31)",
+      "status": "fixed",
+      "regression_test": "make audit osv-scanner gate (security/scanners.json osv-scanner), .github/workflows/security.yml osv-scanner step"
     },
     {
       "id": "SEC-J0-13",
       "category": 8,
       "severity": "medium",
-      "location": ".github/workflows/release.yml:20",
-      "status": "open"
+      "location": ".goreleaser.yaml, .github/workflows/release.yml:20",
+      "status": "fixed",
+      "regression_test": "make release-check (goreleaser check + snapshot build)"
     },
     {
       "id": "SEC-J0-14",
       "category": 8,
       "severity": "low",
-      "location": "internal/secret/bitwarden/exec.go:40, test/e2e/e2e_test.go:88, test/e2e/e2e_test.go:263",
+      "location": "internal/secret/bitwarden/exec.go:40, test/e2e/e2e_test.go:88, test/e2e/e2e_test.go:263, osv-scanner.toml:1-4",
       "status": "open"
     },
     {
       "id": "SEC-J0-15",
       "category": 5,
       "severity": "medium",
-      "location": ".golangci.yml:28",
-      "status": "open"
+      "location": ".golangci.yml:55-79, internal/httpx/boundary_test.go",
+      "status": "fixed",
+      "regression_test": "TestModule_NetworkOnlyThroughHTTPX, TestNetworkViolations_Detector, depguard network rule (make lint)"
     },
     {
       "id": "SEC-J0-16",
       "category": 6,
       "severity": "low",
-      "location": ".golangci.yml:30",
-      "status": "open"
+      "location": ".golangci.yml:34",
+      "status": "fixed",
+      "regression_test": "forbidigo fs-mutation rule (make lint)"
     },
     {
       "id": "SEC-J0-17",
@@ -207,8 +211,9 @@
       "id": "SEC-J0-19",
       "category": 4,
       "severity": "low",
-      "location": "cmd/facto/main.go:111",
-      "status": "open"
+      "location": "cmd/facto/main.go:118, internal/logx/escape.go",
+      "status": "fixed",
+      "regression_test": "TestAttack_WriteErrCannotDriveTerminal, TestAttack_WriteErrMasksSecrets, TestAttack_CLIUsageErrorCannotDriveTerminal, TestEscape"
     },
     {
       "id": "SEC-J0-20",
@@ -244,15 +249,36 @@
       "severity": "low",
       "location": "internal/secret/ref.go:51, internal/config/load.go:80, internal/logx/kv.go",
       "status": "open"
+    },
+    {
+      "id": "SEC-J0-25",
+      "category": 5,
+      "severity": "low",
+      "location": ".golangci.yml:55-79, internal/httpx/boundary_test.go:25-38",
+      "status": "open"
+    },
+    {
+      "id": "SEC-J0-26",
+      "category": 6,
+      "severity": "low",
+      "location": ".golangci.yml:30, .golangci.yml:34",
+      "status": "open"
+    },
+    {
+      "id": "SEC-J0-27",
+      "category": 8,
+      "severity": "medium",
+      "location": ".github/workflows/release.yml:20, .github/workflows/security.yml:18-19, .github/workflows/ci.yml:17",
+      "status": "open"
     }
   ],
   "scanners": {
     "govulncheck": "pass",
     "gosec": "pass",
     "gitleaks": "pass",
-    "osv-scanner": "fail",
+    "osv-scanner": "pass",
     "leakcheck": "pass",
     "e2e": "pass"
   },
-  "verdict": "FAIL"
+  "verdict": "PASS"
 }
