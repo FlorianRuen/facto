@@ -19,7 +19,7 @@ func Harden() error {
 
 func clearDumpable() error {
 	if _, _, errno := syscall.RawSyscall(syscall.SYS_PRCTL, prSetDumpable, 0, 0); errno != 0 {
-		return errno
+		return fmt.Errorf("prctl(PR_SET_DUMPABLE): %w", errno)
 	}
 	return nil
 }
