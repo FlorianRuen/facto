@@ -494,7 +494,7 @@ Protected assets: credentials, the Bitwarden session key, supplier cookies and t
 | --- | --- | --- |
 | Cookie theft through the automated browser | A local process connects to the CDP port | CDP over a pipe (no open port); otherwise a random port on 127.0.0.1, browser closed as soon as possible |
 | Reading the Chromium profile | Cookie database and cache on disk | Temporary profile in a 0700 folder (tmpfs on Linux), deleted at the end of the run, never the personal profile |
-| Reading persisted sessions | `.facto/sessions/` file | AEAD encryption, key in the keyring or password manager; `sessions: ephemeral` option |
+| Reading persisted sessions | `.facto/sessions/` file | AEAD encryption, key per connector in the OS keyring (ADR 0009); `sessions: ephemeral` option |
 | Leak through sync | State folder inside Google Drive | Refuse to start if `.facto/` is under the output folder or a known synced folder |
 | Leak in logs, reports, errors | HTTP request or response logged | Masked `Secret` type, redaction by key and by pattern, HTTP bodies never logged |
 | Leak through the command line | `ps`, shell history | No secret in arguments; environment of the single subprocess only |
@@ -519,13 +519,13 @@ The browser is the most sensitive component: it holds cookies in clear during lo
 | Data | Storage | Note |
 | --- | --- | --- |
 | Supplier credentials | Password manager or OS keyring | Never in `config.yaml` |
-| Session cookies and tokens | `.facto/sessions/<connector>.age` | AEAD (XChaCha20-Poly1305 or `age`), random 256-bit key in the keyring or password manager |
+| Session cookies and tokens | `.facto/sessions/<connector>.sess` | AEAD XChaCha20-Poly1305, format in [ADR 0009](adr/0009-vault-aead.md), random 256-bit key per connector in the keyring, rotated on every login |
 | Google refresh token | OS keyring or password manager | Never in clear |
 | Index, reports, logs | `.facto/` | No secret, checked by canary tests |
 
 - Permissions 0700 on folders and 0600 on files, checked at startup: refuse to continue if they are too broad, like `ssh`.
 - `sessions: ephemeral` writes no session to disk (login on every run). Recommended for yearly use.
-- Scheduled run on Linux without a keyring: encrypted file whose key comes from `systemd-creds`. Explicit mode (`secrets.fallback: file`), documented as weaker.
+- Scheduled run on Linux without a keyring: encrypted file whose key comes from `systemd-creds`. Explicit mode (`secrets.fallback: file`), documented as weaker (J2; until then sessions are ephemeral with one warning, ADR 0009).
 
 ### Data in memory and in output
 
