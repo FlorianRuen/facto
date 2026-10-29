@@ -20,7 +20,7 @@ jobs:
       - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
       - uses: google/osv-scanner-action/osv-scanner-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
-        with: { scan-args: "--recursive ./" }
+        with: { scan-args: "--config=./osv-scanner.toml --no-call-analysis=go --recursive ./" }
       - name: Security score gate
         run: make score-check
 

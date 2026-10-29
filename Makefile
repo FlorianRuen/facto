@@ -74,7 +74,7 @@ audit:
 	umask 077; govulncheck ./...; echo $$? > .cache/audit/govulncheck.status
 	umask 077; gosec -quiet -severity high ./...; echo $$? > .cache/audit/gosec.status
 	umask 077; gitleaks detect --no-banner --redact; echo $$? > .cache/audit/gitleaks.status
-	umask 077; osv-scanner --recursive .; echo $$? > .cache/audit/osv-scanner.status
+	umask 077; osv-scanner --config=osv-scanner.toml --no-call-analysis=go --recursive .; echo $$? > .cache/audit/osv-scanner.status
 	$(GO) run ./scripts/scanners-json
 
 score-check:
