@@ -7,7 +7,18 @@ export FACTO_CANARY := 1
 export CANARY_FILE := $(CURDIR)/.cache/canaries.txt
 export ART_DIR := $(CURDIR)/.cache/test-artifacts
 
-.PHONY: verify fmt-check lint test race cover e2e leakcheck audit score-check tools lint-actions
+.PHONY: verify fmt-check lint test race cover e2e leakcheck audit score-check tools lint-actions release-check
+
+# goreleaser runs from its pinned image (ADR 0001) so its dependencies stay out
+# of tools/go.mod and the osv-scanner scope.
+GORELEASER_IMAGE := goreleaser/goreleaser:v2.12.7@sha256:a2a47c0dda85f8d40eaaa5b9765bf76c69addb6060666f8a51441410d9b008e9
+# The image ships an older Go: the host module cache (which already holds the
+# go.mod toolchain and every module) is served read-only as a file GOPROXY, so
+# nothing is fetched from the network. GOSUMDB is off for that local proxy only;
+# modules are still checked against go.sum.
+GORELEASER_RUN := -e HOME=/tmp -e GOFLAGS=-mod=readonly -e GOTOOLCHAIN=go$(shell sed -n 's/^go //p' go.mod) \
+	-e GOPROXY=file:///hostmod/cache/download -e GOSUMDB=off -e GOMODCACHE=/tmp/gomod \
+	-v $(shell $(GO) env GOMODCACHE):/hostmod:ro -v $(CURDIR):/src:ro
 
 verify: fmt-check lint race cover leakcheck ## everything required before a commit
 	@echo "verify: ok"
@@ -20,6 +31,16 @@ lint:
 
 lint-actions:
 	actionlint
+
+# Validates .goreleaser.yaml and builds an unsigned snapshot of every target
+# of HEAD (no publishing, no signing), like a release does. The repository is
+# mounted read-only and cloned inside the container, so the host tree is never
+# written (a remapped Docker user namespace could not write it anyway).
+release-check:
+	docker run --rm $(GORELEASER_RUN) --entrypoint sh $(GORELEASER_IMAGE) -c \
+		'git config --global --add safe.directory "*" && git clone -q /src /tmp/w && cd /tmp/w && \
+		git remote set-url origin https://github.com/FlorianRuen/facto.git && \
+		goreleaser check && goreleaser release --snapshot --clean --skip=sign,sbom,publish'
 
 test:
 	$(GO) test -short -count=1 $(PKGS)

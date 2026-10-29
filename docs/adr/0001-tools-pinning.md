@@ -24,7 +24,16 @@ run from the repo root with `-modfile=tools/go.mod` (`make tools` =
 | gitleaks | `github.com/zricethezav/gitleaks/v8` | v8.30.1 | 2026-02-21 | MIT |
 | osv-scanner | `github.com/google/osv-scanner/v2/cmd/osv-scanner` | v2.7.0 | 2026-10-12 | Apache-2.0 |
 
-goreleaser joins in J4 under the same rule (its own ADR update).
+goreleaser joined at the J0 close (2026-10-29, audit finding SEC-J0-13), not in J4,
+and not through `tools/go.mod`: its large dependency tree would land in the osv-scanner
+scope of the scanner tools. It is pinned instead as an image,
+`goreleaser/goreleaser:v2.12.7@sha256:a2a47c0d…` (MIT), used by `make release-check`
+(config check plus an unsigned snapshot build of every target, offline: the host module
+cache is served as a file `GOPROXY`, modules stay checked against `go.sum`). In CI,
+`release.yml` runs `goreleaser-action`, which picks the goreleaser version itself; pinning
+it there (`version: v2.12.7`) needs a workflow edit by Florian. `.goreleaser.yaml` builds
+with CGO off and `-trimpath`, empty build ID and commit timestamps (reproducible), signs
+the checksum file with keyless cosign and writes one syft SBOM per archive.
 
 **Known conflict (verified in a scratch module).** In one shared module, osv-scanner
 v2.7.0 raises `go.yaml.in/yaml/v4` to v4.0.0-rc.6 by MVS, and actionlint v1.7.12 (built
