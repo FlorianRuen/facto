@@ -12,8 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/FlorianRuen/facto/internal/fsx"
 	"github.com/FlorianRuen/facto/internal/logx"
@@ -229,33 +227,9 @@ func escapeJoin(fields []string) string {
 	return strings.Join(out, " ")
 }
 
-// escape makes an untrusted string safe on one terminal line: every rune
-// that is not printable (controls, format characters such as bidi
-// overrides, line and paragraph separators, non-ASCII spaces), every
-// invalid byte, U+FFFD and the backslash itself are written as Go-style
-// escapes.
-func escape(s string) string {
-	var b strings.Builder
-	for i := 0; i < len(s); {
-		r, size := utf8.DecodeRuneInString(s[i:])
-		switch {
-		case r == utf8.RuneError && size == 1:
-			fmt.Fprintf(&b, `\x%02x`, s[i])
-		case r == '\\':
-			b.WriteString(`\\`)
-		case r == utf8.RuneError || !unicode.IsPrint(r):
-			if r > 0xFFFF {
-				fmt.Fprintf(&b, `\U%08x`, r)
-			} else {
-				fmt.Fprintf(&b, `\u%04x`, r)
-			}
-		default:
-			b.WriteRune(r)
-		}
-		i += size
-	}
-	return b.String()
-}
+// escape makes an untrusted string safe on one terminal line (see
+// logx.Escape).
+func escape(s string) string { return logx.Escape(s) }
 
 // ReportsDir is the report directory inside the state dir.
 const ReportsDir = "reports"

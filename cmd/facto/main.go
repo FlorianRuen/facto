@@ -15,11 +15,13 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"syscall"
 
 	"github.com/spf13/cobra"
 
 	"github.com/FlorianRuen/facto/internal/clock"
+	"github.com/FlorianRuen/facto/internal/logx"
 	"github.com/FlorianRuen/facto/internal/orchestrator"
 	"github.com/FlorianRuen/facto/internal/proc"
 )
@@ -106,9 +108,19 @@ func runEnv(ctx context.Context, e env, args []string, stdin io.Reader, stdout, 
 	return orchestrator.ExitConfig
 }
 
-// writeErr prints err on stderr, prefixed with the program name.
+// writeErr prints err on stderr, one "facto: " line per line of its
+// message. Errors carry untrusted text (inbox file names repeated raw by
+// *fs.PathError, config values, cobra echoing argv), so the message first
+// goes through logx.Clean, the pattern masking of the redacting logger, then
+// each line through logx.Escape: no control or format character reaches the
+// terminal, and a line break inside an error cannot forge an unprefixed line
+// (SEC-J0-19).
 func writeErr(stderr io.Writer, err error) {
-	_, _ = fmt.Fprintf(stderr, "facto: %v\n", err)
+	var b strings.Builder
+	for _, line := range strings.Split(logx.Clean(err.Error()), "\n") {
+		b.WriteString("facto: " + logx.Escape(line) + "\n")
+	}
+	_, _ = io.WriteString(stderr, b.String())
 }
 
 // newRootCmd builds the command tree on the injected I/O. Cobra never

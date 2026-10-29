@@ -302,6 +302,12 @@ Files dropped in `inbox/` are untrusted input.
   field out of the terminal, logs and reports. Errors may still print user text
   that is not a value: key names (including unknown keys) and connector ids
   (only once known to be a valid slug).
+- **CLI errors are cleaned and escaped.** Every error `facto` prints on stderr
+  goes through `logx.Clean` (the pattern masking of the redacting logger), then
+  each line through `logx.Escape`: control, C1, bidi and other non-printable
+  characters (an inbox file name repeated by an I/O error, argv echoed by a
+  usage error) are written as Go escapes, and every line starts with `facto: `
+  (SEC-J0-19).
 - **Naming templates are never quoted.** An invalid `naming.file` or
   `naming.dir` is reported with the key and a fixed description of the allowed
   grammar and placeholders, never with the template text or the placeholder
