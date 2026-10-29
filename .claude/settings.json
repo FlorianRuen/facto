@@ -14,7 +14,9 @@
       "Bash(git switch:*)",
       "Bash(git worktree:*)",
       "Bash(docker compose -f test/compose.yaml:*)",
-      "Bash(npx playwright test:*)"
+      "Bash(npx playwright test:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh run view:*)"
     ],
     "deny": [
       "Bash(git push --force:*)",
