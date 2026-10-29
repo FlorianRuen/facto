@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -161,7 +163,13 @@ func TestClose_Twice(t *testing.T) {
 func TestOpen_PathWithURIMetacharacters(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	dir := filepath.Join(t.TempDir(), "st ate?x=1#%41")
+	name := "st ate?x=1#%41"
+	if runtime.GOOS == "windows" {
+		// '?' is not a valid file name character on Windows, so it cannot
+		// reach the URI there; '#', '%' and ' ' still can.
+		name = "st ate#x=1#%41"
+	}
+	dir := filepath.Join(t.TempDir(), name)
 	s, err := Open(ctx, dir, clock.NewFake(time.Unix(0, 0)))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -171,8 +179,16 @@ func TestOpen_PathWithURIMetacharacters(t *testing.T) {
 	if err := s.db.QueryRowContext(ctx, `SELECT file FROM pragma_database_list WHERE name = 'main'`).Scan(&file); err != nil {
 		t.Fatalf("database_list: %v", err)
 	}
-	if want := filepath.Join(dir, FileName); file != want {
-		t.Errorf("SQLite opened %q, want %q", file, want)
+	// Compare files, not strings: SQLite reports the resolved path (on macOS
+	// the temp dir /var/... is a symlink to /private/var/...).
+	want := filepath.Join(dir, FileName)
+	wantFI, err := os.Stat(want)
+	if err != nil {
+		t.Fatalf("stat pre-created file: %v", err)
+	}
+	gotFI, err := os.Stat(file)
+	if err != nil || !os.SameFile(gotFI, wantFI) {
+		t.Errorf("SQLite opened %q (stat err %v), want the pre-created file %q", file, err, want)
 	}
 }
 
