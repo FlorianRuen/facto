@@ -19,6 +19,7 @@ import (
 	"github.com/FlorianRuen/facto/internal/config"
 	"github.com/FlorianRuen/facto/internal/connector"
 	"github.com/FlorianRuen/facto/internal/fsx"
+	"github.com/FlorianRuen/facto/internal/orchestrator"
 	"github.com/FlorianRuen/facto/internal/secret"
 	"github.com/FlorianRuen/facto/internal/secret/keyring"
 	"github.com/FlorianRuen/facto/internal/vault"
@@ -39,12 +40,15 @@ type poolParams struct {
 	Executable  string       // resolveBrowserPath; "" in collect when none
 	Interactive bool         // true for `facto login` only (A6)
 	Log         *slog.Logger // the run's redacting logger
+	// Configure, when non-nil, adjusts the pool configuration (runHooks:
+	// e2e builds only); nil in a release build.
+	Configure func(browser.PoolConfig) (browser.PoolConfig, error)
 }
 
 // newBrowserPool builds the production pool. browser.NewPool sweeps the
 // stale profiles a crashed run left behind (A12); it starts no browser.
 func newBrowserPool(ctx context.Context, e env, p poolParams) (browserPool, error) {
-	pool, err := browser.NewPool(ctx, browser.PoolConfig{
+	cfg := browser.PoolConfig{
 		Host: browser.Host{
 			Executable: p.Executable,
 			Geteuid:    os.Geteuid,
@@ -53,7 +57,14 @@ func newBrowserPool(ctx context.Context, e env, p poolParams) (browserPool, erro
 		},
 		StateDir:    p.StateDir,
 		Interactive: p.Interactive,
-	})
+	}
+	if p.Configure != nil {
+		var err error
+		if cfg, err = p.Configure(cfg); err != nil {
+			return nil, fmt.Errorf("pool config: %w", err)
+		}
+	}
+	pool, err := browser.NewPool(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("new pool: %w", err)
 	}
@@ -126,6 +137,46 @@ func installedBrowser(_ env, stateDir string) (string, bool) {
 		return "", false
 	}
 	return filepath.Join(stateDir, browserSubdir, m.Version, "chrome-"+m.Platform, "chrome"), true
+}
+
+// runHooks are the test-only adjustments of one run. Every field is zero
+// in a release build: only an e2e-tagged file of this package sets
+// testRunHooks.
+type runHooks struct {
+	// Browser, when set, is the absolute Chrome path used in place of the
+	// installed one (browser.path in config.yaml still wins).
+	Browser string
+	// NewHTTP builds the connector clients; nil = the orchestrator default.
+	NewHTTP orchestrator.HTTPFactory
+	// Pool adjusts the browser pool configuration; nil = none.
+	Pool func(browser.PoolConfig) (browser.PoolConfig, error)
+}
+
+// testRunHooks is nil in every build but -tags e2e, where an e2e-only file
+// of this package sets it at package initialization. Its error is a usage
+// error naming the variable at fault, never quoting a value.
+var testRunHooks func(e env) (runHooks, error)
+
+// loadRunHooks returns the run's test hooks: none in a release build. An
+// error is a configuration error (exit 2), returned before anything is
+// built or contacted.
+func loadRunHooks(e env) (runHooks, error) {
+	if testRunHooks == nil {
+		return runHooks{}, nil
+	}
+	h, err := testRunHooks(e)
+	if err != nil {
+		return runHooks{}, configError(err)
+	}
+	return h, nil
+}
+
+// installedWith returns installedFor(e, stateDir), or h.Browser when set.
+func installedWith(e env, stateDir string, h runHooks) func() (string, bool) {
+	if h.Browser != "" {
+		return func() (string, bool) { return h.Browser, true }
+	}
+	return installedFor(e, stateDir)
 }
 
 // installedFor returns the InstalledBrowser seam of e bound to e and the

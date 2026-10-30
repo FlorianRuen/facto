@@ -59,7 +59,7 @@ func NewPortStarter(cfg PortStarterConfig) Starter {
 }
 
 func startPort(ctx context.Context, cfg PortStarterConfig, cmd Command) (Process, error) {
-	profile, err := portArgvProfile(cmd.Args)
+	profile, err := portArgvProfile(cmd.Args, cmd.checkArgs)
 	if err != nil {
 		return nil, err
 	}
@@ -141,8 +141,9 @@ func killQuiet(ep ExecProcess) error {
 }
 
 // portArgvProfile vets the transport switches of a windows argv and returns
-// the --user-data-dir value.
-func portArgvProfile(args []string) (string, error) {
+// the --user-data-dir value. check vets the whole argv; nil is the release
+// CheckFlags (only the e2e build's argvPolicy sets one, Command.checkArgs).
+func portArgvProfile(args []string, check func([]string) error) (string, error) {
 	ports, profiles := 0, 0
 	profile := ""
 	for _, a := range args {
@@ -172,7 +173,10 @@ func portArgvProfile(args []string) (string, error) {
 	case profiles > 1:
 		return "", fmt.Errorf("%w: --user-data-dir given twice", ErrForbiddenFlag)
 	}
-	if err := CheckFlags(goosWindows, args); err != nil {
+	if check == nil {
+		check = func(a []string) error { return CheckFlags(goosWindows, a) }
+	}
+	if err := check(args); err != nil {
 		return "", err
 	}
 	return profile, nil

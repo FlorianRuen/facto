@@ -91,6 +91,11 @@ type PoolConfig struct {
 	// cancels the pool context that bounds every browser lifetime. Zero:
 	// defaultCloseGrace.
 	CloseGrace time.Duration
+
+	// flags, when non-nil, replaces Flags and CheckFlags for every launch
+	// of the pool. Only the e2e-tagged WithE2E sets it: a release build has
+	// no way to, so its launches always carry the release argv.
+	flags *argvPolicy
 }
 
 // defaultCloseGrace bounds how long Pool.Close lets an in-flight Launch
@@ -106,6 +111,7 @@ type Pool struct {
 	base        string
 	interactive bool
 	start       Starter
+	flags       *argvPolicy // nil: Flags and CheckFlags (PoolConfig.flags)
 
 	mu     sync.Mutex
 	closed bool
@@ -180,6 +186,7 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 		base:        base,
 		interactive: cfg.Interactive,
 		start:       cfg.Start,
+		flags:       cfg.flags,
 		leases:      map[*PoolBrowser]struct{}{},
 	}
 	if p.start == nil {
@@ -448,12 +455,12 @@ func (p *Pool) removeProfile(dir string) error {
 
 // prepare builds the vetted Command for profile.
 func (p *Pool) prepare(profile string, domains []string, visible bool) (Command, error) {
-	return Prepare(p.host, Options{
+	return prepareWith(p.host, Options{
 		ProfileDir:     profile,
 		AllowedDomains: domains,
 		Visible:        visible,
 		AllowProxy:     ProxyAllowed(p.host.LookupEnv),
-	})
+	}, p.flags)
 }
 
 // startPage starts the browser with ctx as its lifetime and opens the login

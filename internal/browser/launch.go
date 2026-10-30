@@ -50,6 +50,12 @@ type Command struct {
 	Args   []string
 	Env    []string
 	Stderr io.Writer // set by Launch: capped at MaxStderrBytes, never logged verbatim
+
+	// checkArgs, when non-nil, is the argv check a Starter that re-vets
+	// Args (the windows port Starter) uses instead of the release
+	// CheckFlags. Only prepareWith sets it, from an argvPolicy, which only
+	// the e2e build constructs.
+	checkArgs func(args []string) error
 }
 
 // StartFunc starts Chrome (exec and transport, T7). It must write Chrome's
@@ -60,6 +66,24 @@ type StartFunc func(ctx context.Context, cmd Command) error
 // a nil Stderr: root check first, then CheckExecutableAs (owner checked
 // against h.Geteuid() through h.Owner), Flags, CheckFlags and BuildEnv.
 func Prepare(h Host, opts Options) (Command, error) {
+	return prepareWith(h, opts, nil)
+}
+
+// argvPolicy builds and vets Chrome's argv in place of Flags and
+// CheckFlags. Only the e2e build constructs one (WithE2E).
+type argvPolicy struct {
+	build func(opts Options) ([]string, error)
+	check func(opts Options, args []string) error
+}
+
+// prepareWith is Prepare with the argv built and vetted by policy, or by
+// Flags and CheckFlags when policy is nil.
+func prepareWith(h Host, opts Options, policy *argvPolicy) (Command, error) {
+	build := Flags
+	check := func(o Options, args []string) error { return CheckFlags(o.GOOS, args) }
+	if policy != nil {
+		build, check = policy.build, policy.check
+	}
 	if h.Geteuid == nil {
 		return Command{}, fmt.Errorf("%w: effective uid unknown", ErrRunAsRoot)
 	}
@@ -70,14 +94,18 @@ func Prepare(h Host, opts Options) (Command, error) {
 	if err := CheckExecutableAs(h.Executable, euid, h.owner()); err != nil {
 		return Command{}, err
 	}
-	args, err := Flags(opts)
+	args, err := build(opts)
 	if err != nil {
 		return Command{}, err
 	}
-	if err := CheckFlags(opts.GOOS, args); err != nil {
+	if err := check(opts, args); err != nil {
 		return Command{}, err
 	}
-	return Command{Path: h.Executable, Args: args, Env: BuildEnv(h.LookupEnv)}, nil
+	cmd := Command{Path: h.Executable, Args: args, Env: BuildEnv(h.LookupEnv)}
+	if policy != nil {
+		cmd.checkArgs = func(a []string) error { return policy.check(opts, a) }
+	}
+	return cmd, nil
 }
 
 // Launch prepares the Command and starts it exactly once: a failure is

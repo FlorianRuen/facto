@@ -121,7 +121,11 @@ func collect(ctx context.Context, e env, p collectParams) error {
 	// Collect never needs a browser by itself: without one the pool is
 	// still built (it sweeps stale profiles, A12) and a connector that
 	// launches gets the pool's error.
-	exe, err := resolveBrowserPath(cfg, installedFor(e, cfg.StateDir))
+	hooks, err := loadRunHooks(e)
+	if err != nil {
+		return err
+	}
+	exe, err := resolveBrowserPath(cfg, installedWith(e, cfg.StateDir, hooks))
 	if err != nil && !errors.Is(err, errNoBrowser) {
 		return configError(err)
 	}
@@ -149,7 +153,7 @@ func collect(ctx context.Context, e env, p collectParams) error {
 	}
 
 	report := orchestrator.Report{StartedAt: e.Clock.Now()}
-	stateReady, runErr := collectInto(ctx, e, cfg, collectDeps{reg: reg, namer: namer, log: log, secrets: secrets, browserPath: exe}, p, &report)
+	stateReady, runErr := collectInto(ctx, e, cfg, collectDeps{reg: reg, namer: namer, log: log, secrets: secrets, browserPath: exe, hooks: hooks}, p, &report)
 	closeSecretsErr := closeErr("secrets", secrets.CloseAll())
 	report.FinishedAt = e.Clock.Now()
 
@@ -193,6 +197,8 @@ type collectDeps struct {
 	// browserPath is the browser binary, "" when none is configured or
 	// installed.
 	browserPath string
+	// hooks are the run's test hooks (zero in a release build).
+	hooks runHooks
 }
 
 // collectInto opens the output folder, the index and the inbox, then fills
@@ -229,7 +235,7 @@ func collectInto(ctx context.Context, e env, cfg *config.Config, d collectDeps, 
 
 	// The pool first: building it sweeps stale profiles (A12), which must
 	// happen even when the session store cannot be opened.
-	pool, err := buildPool(ctx, e, poolParams{StateDir: cfg.StateDir, Executable: d.browserPath, Interactive: false, Log: d.log})
+	pool, err := buildPool(ctx, e, poolParams{StateDir: cfg.StateDir, Executable: d.browserPath, Interactive: false, Log: d.log, Configure: d.hooks.Pool})
 	if err != nil {
 		return true, err
 	}
@@ -244,6 +250,7 @@ func collectInto(ctx context.Context, e env, cfg *config.Config, d collectDeps, 
 		Dest:        dst,
 		Namer:       d.namer,
 		Log:         d.log,
+		NewHTTP:     d.hooks.NewHTTP,
 		Secrets:     d.secrets,
 		Sessions:    sessions,
 		Browser:     pool,

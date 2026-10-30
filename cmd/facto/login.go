@@ -88,7 +88,11 @@ func login(ctx context.Context, e env, p loginParams) error {
 	if err != nil {
 		return err
 	}
-	exe, err := resolveBrowserPath(cfg, installedFor(e, cfg.StateDir))
+	hooks, err := loadRunHooks(e)
+	if err != nil {
+		return err
+	}
+	exe, err := resolveBrowserPath(cfg, installedWith(e, cfg.StateDir, hooks))
 	if err != nil {
 		return configError(err)
 	}
@@ -104,7 +108,7 @@ func login(ctx context.Context, e env, p loginParams) error {
 	log := slog.New(logx.NewHandler(slog.NewTextHandler(p.stderr, &slog.HandlerOptions{Level: slog.LevelWarn}), logx.Options{}))
 	warnIfStalePin(ctx, e, cfg, exe, log)
 
-	res, persistent, runErr := loginWith(ctx, e, cfg, loginDeps{conn: conn, secrets: secrets, log: log, browserPath: exe, prompt: p.prompt})
+	res, persistent, runErr := loginWith(ctx, e, cfg, loginDeps{conn: conn, secrets: secrets, log: log, browserPath: exe, prompt: p.prompt, hooks: hooks})
 	if cerr := closeErr("secrets", secrets.CloseAll()); cerr != nil {
 		runErr = errors.Join(runErr, cerr)
 	}
@@ -160,6 +164,7 @@ type loginDeps struct {
 	log         *slog.Logger
 	browserPath string
 	prompt      connector.Prompter
+	hooks       runHooks // the run's test hooks (zero in a release build)
 }
 
 // loginWith creates the state dir, opens the session store and an
@@ -170,7 +175,7 @@ func loginWith(ctx context.Context, e env, cfg *config.Config, d loginDeps) (res
 		return res, false, err
 	}
 	// The pool first: building it sweeps stale profiles (A12), as collect.
-	pool, err := buildPool(ctx, e, poolParams{StateDir: cfg.StateDir, Executable: d.browserPath, Interactive: true, Log: d.log})
+	pool, err := buildPool(ctx, e, poolParams{StateDir: cfg.StateDir, Executable: d.browserPath, Interactive: true, Log: d.log, Configure: d.hooks.Pool})
 	if err != nil {
 		return res, false, err
 	}
@@ -182,6 +187,7 @@ func loginWith(ctx context.Context, e env, cfg *config.Config, d loginDeps) (res
 
 	res = orchestrator.Login(ctx, orchestrator.Deps{
 		Log:         d.log,
+		NewHTTP:     d.hooks.NewHTTP,
 		Secrets:     d.secrets,
 		Sessions:    sessions,
 		Browser:     pool,

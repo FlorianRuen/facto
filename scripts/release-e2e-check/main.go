@@ -13,9 +13,10 @@
 //     "fakeprovider" (connectors/fakeprovider);
 //   - no Go file compiled into any dependency has a //go:build (or
 //     // +build) constraint mentioning the "e2e" tag (internal/browser's
-//     flags_e2e.go: FlagsE2E, E2EOverrides);
+//     flags_e2e.go, internal/httpx's loopback_e2e.go);
 //   - `go tool nm` on the binary lists no symbol of an e2e-only package and
-//     neither internal/browser.FlagsE2E nor internal/browser.E2EOverrides.
+//     none of e2eOnlySymbols (internal/browser FlagsE2E, E2EOverrides,
+//     WithE2E, CheckFlagsE2E, PoolE2E; internal/httpx NewLoopback).
 //     A release binary is linked with -s (no symbol table), so the nm
 //     binary is built with the same flags minus the single "-s" ldflag,
 //     which changes nothing about what is linked. An nm listing no symbol
@@ -23,7 +24,8 @@
 //
 // Self-test: the same inspection of the -tags e2e build must find
 // internal/vault/e2ekey and internal/secret/e2efile among the deps and their
-// Sentinel symbols in nm, otherwise the check is vacuous and fails.
+// Sentinel symbols in nm, and every selfTestFuncs entry in nm, otherwise
+// the check is vacuous and fails.
 //
 // Exit status: 0 and exactly okLine on stdout when every check passed; 1
 // when a check failed (one stderr line per finding); 2 on a usage or I/O
@@ -76,9 +78,26 @@ var errNoBuild = errors.New("release-e2e-check: no facto build in goreleaser con
 // link, each with its Sentinel symbol.
 var selfTestPkgs = []string{"internal/vault/e2ekey", "internal/secret/e2efile"}
 
-// e2eOnlyBrowserSymbols are the internal/browser identifiers declared only
-// in its e2e-tagged file.
-var e2eOnlyBrowserSymbols = []string{"internal/browser.FlagsE2E", "internal/browser.E2EOverrides"}
+// e2eOnlySymbols are the identifiers declared only in e2e-tagged files of
+// packages the release build links (internal/browser's flags_e2e.go,
+// internal/httpx's loopback_e2e.go).
+var e2eOnlySymbols = []string{
+	"internal/browser.FlagsE2E",
+	"internal/browser.E2EOverrides",
+	"internal/browser.WithE2E",
+	"internal/browser.CheckFlagsE2E",
+	"internal/browser.PoolE2E",
+	"internal/httpx.NewLoopback",
+}
+
+// selfTestFuncs are the e2e-only functions cmd/facto calls in a -tags e2e
+// build: the self-test requires each in that binary's nm listing, so the
+// e2eOnlySymbols check is not vacuous.
+var selfTestFuncs = []string{
+	"internal/browser.WithE2E",
+	"internal/browser.CheckFlagsE2E",
+	"internal/httpx.NewLoopback",
+}
 
 // releaseBuild is builds[id=facto] of .goreleaser.yaml.
 type releaseBuild struct {
@@ -437,7 +456,7 @@ func forbiddenPkg(mod, importPath string) bool {
 // forbiddenSymbol reports a symbol naming an e2e-only package of mod, or an
 // internal/browser e2e-only identifier.
 func forbiddenSymbol(mod, sym string) bool {
-	for _, s := range e2eOnlyBrowserSymbols {
+	for _, s := range e2eOnlySymbols {
 		if strings.Contains(sym, mod+"/"+s) {
 			return true
 		}
@@ -605,6 +624,12 @@ func check(ctx context.Context, root, grFile string, extraTags []string) (findin
 		}
 		if !slices.ContainsFunc(self.Symbols, func(s string) bool { return strings.HasSuffix(s, pkg+".Sentinel") }) {
 			findings = append(findings, "self-test: -tags e2e binary lacks "+pkg+".Sentinel (nm check is vacuous)")
+		}
+	}
+	for _, f := range selfTestFuncs {
+		sym := mod + "/" + f
+		if !slices.ContainsFunc(self.Symbols, func(s string) bool { return s == sym || strings.HasPrefix(s, sym+".") }) {
+			findings = append(findings, "self-test: -tags e2e binary lacks "+sym+" (nm check is vacuous)")
 		}
 	}
 	return findings, nil

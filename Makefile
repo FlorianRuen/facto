@@ -99,12 +99,16 @@ chrome:
 	mkdir -p .cache
 	$(GO) run ./cmd/facto browser install --dir "$(CHROME_DIR)"
 
-# The real-Chrome isolation checks (J1 T13) need the chrome build tag on top
-# of e2e, so e2e-unit (in verify) never needs a browser.
+# make e2e: the real-Chrome isolation checks (J1 T13) need the chrome build
+# tag on top of e2e, so e2e-unit (in verify) never needs a browser. Then the
+# scenario harness (J1 T22: test/e2e, facto built with -tags e2e against the
+# fake site on 127.0.0.1). Both get the same FACTO_E2E_CHROME, built from
+# CHROME_DIR and CHROME_VERSION: the pinned build `chrome` installed and
+# verified (no second install run).
 e2e: chrome
 	FACTO_E2E_CHROME="$(CHROME_DIR)/$(CHROME_VERSION)/chrome-linux64/chrome" $(GO) test -race -tags e2e,chrome -count=1 -v ./internal/browser/...
 	docker compose -f test/compose.yaml up -d --wait vaultwarden
-	$(GO) test -tags e2e -count=1 -v ./test/e2e/... ; status=$$?; \
+	FACTO_E2E_CHROME="$(CHROME_DIR)/$(CHROME_VERSION)/chrome-linux64/chrome" $(GO) test -tags e2e -count=1 -v ./test/e2e/... ; status=$$?; \
 	docker compose -f test/compose.yaml down -v; exit $$status
 
 # Real-Chrome Windows checks (J1 T13/T32): exactly the command of the

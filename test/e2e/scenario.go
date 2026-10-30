@@ -29,6 +29,45 @@
 //
 // Every {{canary:<kind>}} value is checked absent from stdout, stderr and
 // every file under HOME except the setup files that contained it.
+//
+// Fake site keys (J1 T22; the site lives in fakesite_test.go, bound to
+// 127.0.0.1 only, plan A7):
+//
+//	fakesite:                    # starts the fake TLS site for this scenario
+//	  mode: password             # password, totp, email-otp, sso-redirect,
+//	                             # expired-session, rate-limit, site-changed,
+//	                             # captcha, bad-password (CSRF is enforced in
+//	                             # every mode that serves a form)
+//	  login: fp/login            # secrets key whose value the site accepts as login
+//	  password: fp/password      # secrets key whose value the site accepts as password
+//	  expire_after: 2            # expired-session only (>= 1): authenticated API
+//	                             # requests one session serves before 401
+//	  rate_limit_after: 0        # rate-limit only (>= 0): API requests before 429
+//	  invoices:                  # seeded documents (list + PDF endpoints)
+//	    - { id: FP-2026-0001, contract: C-1, issued_at: 2026-03-14,
+//	        amount_cents: 8412, currency: EUR, fixture: edf-invoice.pdf }
+//	secrets:                     # e2e://<item>/<field> files, 0600 in a 0700 dir
+//	  fp/login: "user-{{canary:token}}"   # outside HOME; FACTO_E2E_SECRETS_DIR
+//	  fp/password: "{{canary:password}}"
+//	  fp/otp: "{{totp}}"         # current TOTP code of the site (mode totp only)
+//	stdin:                       # lines fed one by one; sets FACTO_E2E_INTERACTIVE=1
+//	  - "{{outbox}}"             # waits for the next email code (mode email-otp only)
+//	expect:
+//	  requests:                  # assertions on the site's request log of the run
+//	    - { method: POST, host: www.fakeprovider.test, path: /login, count: 1 }
+//	    - { host: evil.test, count: 0 }
+//	    - { path: /api/*, min: 1 }        # trailing * = path prefix
+//	    - { status: 429, last: true }     # the last logged request matches
+//	  browser:                   # probes on the Chrome that loads the login page
+//	    no_cdp_port: true        # no TCP listener in facto's process tree
+//	    profile_removed: true    # every --user-data-dir is gone after the run
+//
+// When fakesite is set, facto (built with -tags e2e) gets FACTO_E2E_CHROME
+// (the harness's own FACTO_E2E_CHROME, set by make e2e), FACTO_E2E_LOOPBACK
+// (127.0.0.1:<site port>: the dial target of every allowed host, for httpx
+// and Chrome's --host-resolver-rules) and FACTO_E2E_CA (PEM file of the
+// site's test CA: httpx roots and Chrome SPKI allowlist). secrets sets
+// FACTO_E2E_SECRETS_DIR, stdin sets FACTO_E2E_INTERACTIVE=1 (A8).
 package e2e
 
 import (
@@ -58,6 +97,75 @@ type Scenario struct {
 	Args        []string    `yaml:"args"`
 	Expect      Expect      `yaml:"expect"`
 	Repeat      *Repeat     `yaml:"repeat"`
+
+	FakeSite *FakeSite         `yaml:"fakesite"`
+	Secrets  map[string]string `yaml:"secrets"`
+	Stdin    []string          `yaml:"stdin"`
+}
+
+// Fake site modes.
+const (
+	ModePassword       = "password"
+	ModeTOTP           = "totp"
+	ModeEmailOTP       = "email-otp"
+	ModeSSORedirect    = "sso-redirect"
+	ModeExpiredSession = "expired-session"
+	ModeRateLimit      = "rate-limit"
+	ModeSiteChanged    = "site-changed"
+	ModeCaptcha        = "captcha"
+	ModeBadPassword    = "bad-password"
+)
+
+// Modes lists every fake site mode.
+var Modes = []string{
+	ModePassword, ModeTOTP, ModeEmailOTP, ModeSSORedirect, ModeExpiredSession,
+	ModeRateLimit, ModeSiteChanged, ModeCaptcha, ModeBadPassword,
+}
+
+// Hosts served by the fake site. EvilHost is off every allowlist: the login
+// page references it so that a browser leak shows in the request log.
+const (
+	HostWWW  = "www.fakeprovider.test"
+	HostSSO  = "sso.fakeprovider.test"
+	EvilHost = "evil.test"
+)
+
+// FakeSite configures the scenario's fake site.
+type FakeSite struct {
+	Mode           string        `yaml:"mode"`
+	Login          string        `yaml:"login"`
+	Password       string        `yaml:"password"`
+	ExpireAfter    int           `yaml:"expire_after"`
+	RateLimitAfter int           `yaml:"rate_limit_after"`
+	Invoices       []FakeInvoice `yaml:"invoices"`
+}
+
+// FakeInvoice is one document the site lists and serves.
+type FakeInvoice struct {
+	ID          string `yaml:"id"`
+	Contract    string `yaml:"contract"`
+	IssuedAt    string `yaml:"issued_at"`
+	AmountCents *int64 `yaml:"amount_cents"`
+	Currency    string `yaml:"currency"`
+	Fixture     string `yaml:"fixture"`
+}
+
+// RequestExpect counts the logged requests matching every set filter.
+// Exactly one of Count, Min or Last is set.
+type RequestExpect struct {
+	Method string `yaml:"method"`
+	Host   string `yaml:"host"`
+	Path   string `yaml:"path"` // exact, or a prefix when it ends with "*"
+	Status int    `yaml:"status"`
+	Count  *int   `yaml:"count"`
+	Min    *int   `yaml:"min"`
+	Last   bool   `yaml:"last"`
+}
+
+// BrowserExpect enables the browser probes of one run.
+type BrowserExpect struct {
+	NoCDPPort      bool `yaml:"no_cdp_port"`
+	ProfileRemoved bool `yaml:"profile_removed"`
 }
 
 // SetupFile is one entry created in HOME before the first run. Exactly one
@@ -79,6 +187,9 @@ type Expect struct {
 	Files  []ExpectFile `yaml:"files"`
 	Absent []string     `yaml:"absent"`
 	Trees  []Tree       `yaml:"trees"`
+
+	Requests []RequestExpect `yaml:"requests"`
+	Browser  *BrowserExpect  `yaml:"browser"`
 }
 
 // Output holds checks on stdout or stderr.
@@ -117,6 +228,19 @@ var (
 	nameRE        = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 	placeholderRE = regexp.MustCompile(`\{\{([^{}]*)\}\}`)
 	canaryKindRE  = regexp.MustCompile(`^canary:[a-z0-9]+$`)
+	secretKeyRE   = regexp.MustCompile(`^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`)
+	invoiceIDRE   = regexp.MustCompile(`^[A-Z0-9][A-Z0-9-]{0,63}$`)
+	contractRE    = regexp.MustCompile(`^[A-Z0-9-]{1,32}$`)
+	currencyRE    = regexp.MustCompile(`^[A-Z]{3}$`)
+	reqPathRE     = regexp.MustCompile(`^/[A-Za-z0-9._~/-]*\*?$`)
+)
+
+// Harness limits.
+const (
+	maxSecrets   = 32
+	maxStdin     = 16
+	maxInvoices  = 100
+	maxRateLimit = 1000
 )
 
 // Parse decodes and validates one scenario. Unknown keys, a second YAML
@@ -162,11 +286,20 @@ func (s *Scenario) validate() error {
 			return err
 		}
 	}
+	if err := s.validateFakeSite(); err != nil {
+		return err
+	}
 	if err := s.Expect.validate("expect"); err != nil {
+		return err
+	}
+	if err := s.Expect.validateSite("expect", s.FakeSite != nil); err != nil {
 		return err
 	}
 	if s.Repeat != nil {
 		if err := s.Repeat.Expect.validate("repeat.expect"); err != nil {
+			return err
+		}
+		if err := s.Repeat.Expect.validateSite("repeat.expect", s.FakeSite != nil); err != nil {
 			return err
 		}
 		for i, p := range s.Repeat.Unchanged {
