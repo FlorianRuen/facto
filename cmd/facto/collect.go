@@ -145,6 +145,10 @@ func collect(ctx context.Context, e env, p collectParams) error {
 	if err != nil {
 		return &exitError{code: orchestrator.ExitAttention, err: fmt.Errorf("secrets: %w", err)}
 	}
+	closeSecrets := onceCloser(secrets)
+	// A panic anywhere below (outside the orchestrator's per-connector
+	// recover) still locks the password manager (SEC-J1-13).
+	defer func() { _ = closeSecrets() }()
 
 	log := slog.New(logx.NewHandler(slog.NewTextHandler(p.stderr, &slog.HandlerOptions{Level: slog.LevelWarn}), logx.Options{}))
 	warnIfStalePin(ctx, e, cfg, exe, log)
@@ -154,7 +158,7 @@ func collect(ctx context.Context, e env, p collectParams) error {
 
 	report := orchestrator.Report{StartedAt: e.Clock.Now()}
 	stateReady, runErr := collectInto(ctx, e, cfg, collectDeps{reg: reg, namer: namer, log: log, secrets: secrets, browserPath: exe, hooks: hooks}, p, &report)
-	closeSecretsErr := closeErr("secrets", secrets.CloseAll())
+	closeSecretsErr := closeSecrets()
 	report.FinishedAt = e.Clock.Now()
 
 	code := orchestrator.ExitCode(report, runErr)

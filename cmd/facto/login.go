@@ -105,11 +105,15 @@ func login(ctx context.Context, e env, p loginParams) error {
 	if err != nil {
 		return &exitError{code: orchestrator.ExitAttention, err: fmt.Errorf("secrets: %w", err)}
 	}
+	closeSecrets := onceCloser(secrets)
+	// A panic anywhere below (outside the orchestrator's per-connector
+	// recover) still locks the password manager (SEC-J1-13).
+	defer func() { _ = closeSecrets() }()
 	log := slog.New(logx.NewHandler(slog.NewTextHandler(p.stderr, &slog.HandlerOptions{Level: slog.LevelWarn}), logx.Options{}))
 	warnIfStalePin(ctx, e, cfg, exe, log)
 
 	res, persistent, runErr := loginWith(ctx, e, cfg, loginDeps{conn: conn, secrets: secrets, log: log, browserPath: exe, prompt: p.prompt, hooks: hooks})
-	if cerr := closeErr("secrets", secrets.CloseAll()); cerr != nil {
+	if cerr := closeSecrets(); cerr != nil {
 		runErr = errors.Join(runErr, cerr)
 	}
 	if runErr != nil {

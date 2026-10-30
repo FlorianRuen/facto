@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/FlorianRuen/facto/internal/config"
 	"github.com/FlorianRuen/facto/internal/connector"
@@ -25,6 +26,15 @@ type secretResolver interface {
 	// CloseAll closes every provider (locks the password manager, wipes
 	// session keys).
 	CloseAll() error
+}
+
+// onceCloser returns a function that closes r (CloseAll, wrapped by
+// closeErr) on its first call and returns that same result on every later
+// call. collect and login defer it right after building the resolver, so a
+// panic still locks the password manager, and also call it on the normal
+// path to report the close error: CloseAll runs exactly once either way.
+func onceCloser(r secretResolver) func() error {
+	return sync.OnceValue(func() error { return closeErr("secrets", r.CloseAll()) })
 }
 
 // testSecretProviders returns the providers of test-only schemes. It is nil
