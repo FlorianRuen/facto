@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/FlorianRuen/facto/internal/connector"
 	"github.com/FlorianRuen/facto/internal/fsx"
@@ -86,7 +87,15 @@ type PoolConfig struct {
 	// PidAlive reports whether pid runs (stale-profile sweep). Nil: a
 	// signal-0 probe (EPERM counts as alive). Never called with pid <= 0.
 	PidAlive func(pid int) bool
+	// CloseGrace is how long Close waits for in-flight Launches before it
+	// cancels the pool context that bounds every browser lifetime. Zero:
+	// defaultCloseGrace.
+	CloseGrace time.Duration
 }
+
+// defaultCloseGrace bounds how long Pool.Close lets an in-flight Launch
+// finish on its own (the Windows connect is bounded at portConnectTimeout).
+const defaultCloseGrace = 10 * time.Second
 
 // Pool hands out browsers, each on a fresh 0700 profile under Base() that
 // is removed once the browser is reaped (ADR 0008 "Teardown"). It
@@ -101,6 +110,15 @@ type Pool struct {
 	mu     sync.Mutex
 	closed bool
 	leases map[*PoolBrowser]struct{}
+
+	// inflight counts the Launches past the closed check; Close waits for
+	// them, so no browser outlives the pool.
+	inflight sync.WaitGroup
+	// ctx bounds every browser lifetime of the pool, whatever the Launch
+	// context: Close cancels it once closeGrace has elapsed (and on return).
+	ctx        context.Context
+	cancel     context.CancelFunc
+	closeGrace time.Duration
 }
 
 var _ connector.BrowserPool = (*Pool)(nil)
@@ -110,7 +128,12 @@ var _ connector.BrowserPool = (*Pool)(nil)
 // is created 0700 through fsx; an existing one must be a real, private
 // directory, otherwise ErrUnsafeProfileDir (never chmodded, never
 // followed). A base equal to or inside a personal browser profile under
-// HOME is refused with ErrUnsafeProfileDir. Then it sweeps stale profiles
+// HOME is refused with ErrUnsafeProfileDir. On unix, XDG_RUNTIME_DIR itself,
+// when used, must be a real directory (Lstat, not a symlink) without any
+// group or world bit, owned by Host.Geteuid(); and the chosen base must be
+// owned by Host.Geteuid() exactly (Host.Owner; root is foreign too).
+// Otherwise ErrUnsafeProfileDir, with no fallback to <StateDir>/tmp. Then it
+// sweeps stale profiles
 // in both <XDG_RUNTIME_DIR>/facto and <StateDir>/tmp (those that exist): an
 // entry named profile-<pid>-<random> (pid a positive decimal) whose pid is
 // not alive is removed with fsx.RemoveTree (symlinks never followed); live
@@ -127,8 +150,10 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 		return nil, fmt.Errorf("%w: state directory must be absolute", ErrUnsafeProfileDir)
 	}
 	bases := []string{}
+	xdg := ""
 	if v, ok := lookup("XDG_RUNTIME_DIR"); ok && v != "" && filepath.IsAbs(v) {
-		bases = append(bases, filepath.Join(v, runtimeSubdir))
+		xdg = filepath.Clean(v)
+		bases = append(bases, filepath.Join(xdg, runtimeSubdir))
 	}
 	bases = append(bases, filepath.Join(cfg.StateDir, stateSubdir))
 	home, _ := lookup("HOME")
@@ -137,8 +162,16 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 			return nil, err
 		}
 	}
+	if xdg != "" {
+		if err := checkRuntimeDir(cfg.Host, xdg); err != nil {
+			return nil, err
+		}
+	}
 	base := bases[0]
 	if err := ensureBase(base); err != nil {
+		return nil, err
+	}
+	if err := checkBaseOwner(cfg.Host, base); err != nil {
 		return nil, err
 	}
 	p := &Pool{
@@ -152,6 +185,12 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 	if p.start == nil {
 		p.start = defaultStarter
 	}
+	p.closeGrace = cfg.CloseGrace
+	if p.closeGrace <= 0 {
+		p.closeGrace = defaultCloseGrace
+	}
+	// Not derived from NewPool's ctx, which only bounds the setup and sweep.
+	p.ctx, p.cancel = context.WithCancel(context.Background())
 	alive := cfg.PidAlive
 	if alive == nil {
 		alive = pidAlive
@@ -332,9 +371,14 @@ func (p *Pool) Launch(ctx context.Context, opts connector.LaunchOptions) (connec
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("launch browser: %w", err)
 	}
-	if p.isClosed() {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
 		return nil, fmt.Errorf("%w: pool closed", ErrLaunchFailed)
 	}
+	p.inflight.Add(1)
+	p.mu.Unlock()
+	defer p.inflight.Done()
 	profile, err := p.newProfile()
 	if err != nil {
 		return nil, err
@@ -363,25 +407,19 @@ func (p *Pool) launchOn(ctx context.Context, profile string, opts connector.Laun
 	if err != nil {
 		return nil, err
 	}
-	lctx, cancel := context.WithCancel(ctx)
+	lctx, cancel := linkedContext(ctx, p.ctx)
 	proc, page, err := p.startPage(lctx, cmd, domains)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
 	b := &PoolBrowser{
-		pool: p, profile: profile, domains: domains,
+		pool: p, profile: profile, domains: domains, launchCtx: ctx,
 		proc: proc, page: page, cancel: cancel,
 		done: make(chan struct{}),
 	}
 	go b.watch(lctx, proc)
 	return b, nil
-}
-
-func (p *Pool) isClosed() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.closed
 }
 
 // newProfile creates a fresh 0700 profile directory directly under the base.
@@ -455,7 +493,11 @@ func (p *Pool) classify(ctx context.Context, stderr *capWriter, err error) error
 }
 
 // Close tears down every browser still leased (killed, reaped, profile
-// removed) and waits for it. Later launches fail. Idempotent.
+// removed) and waits for it. It also waits for every Launch in flight: a
+// browser such a Launch started is torn down by that Launch, which then
+// fails with ErrLaunchFailed ("pool closed"). After CloseGrace the pool
+// context is cancelled, so a Launch whose own context never ends is aborted
+// rather than waited for forever. Later launches fail. Idempotent.
 func (p *Pool) Close() error {
 	p.mu.Lock()
 	p.closed = true
@@ -468,7 +510,27 @@ func (p *Pool) Close() error {
 	for _, b := range leases {
 		errs = append(errs, b.teardown(context.Background()))
 	}
+	p.waitInflight()
+	p.cancel()
 	return errors.Join(errs...)
+}
+
+// waitInflight waits for the in-flight Launches, cancelling the pool
+// context once closeGrace has elapsed.
+func (p *Pool) waitInflight() {
+	done := make(chan struct{})
+	go func() {
+		p.inflight.Wait()
+		close(done)
+	}()
+	grace := time.NewTimer(p.closeGrace)
+	defer grace.Stop()
+	select {
+	case <-done:
+	case <-grace.C:
+		p.cancel()
+		<-done
+	}
 }
 
 func (p *Pool) forget(b *PoolBrowser) {
@@ -483,6 +545,9 @@ type PoolBrowser struct {
 	pool    *Pool
 	profile string
 	domains []string
+	// launchCtx is the Launch context: it bounds every browser of the
+	// lease, the visible one of RelaunchVisible included.
+	launchCtx context.Context
 
 	// opMu serializes RelaunchVisible and teardown.
 	opMu sync.Mutex
@@ -564,8 +629,9 @@ func (b *PoolBrowser) Close() error {
 }
 
 // RelaunchVisible kills the current (headless) browser without removing the
-// profile, starts a visible one on the same profile with ctx as its
-// lifetime and opens a new page. In a non-interactive pool it returns an
+// profile, starts a visible one on the same profile and opens a new page.
+// The visible browser's lifetime is bound to both ctx and the Launch
+// context: either ending tears the lease down. In a non-interactive pool it returns an
 // error wrapping connector.ErrNeedsLogin and nothing changes. If the
 // visible browser cannot be started the lease is over.
 func (b *PoolBrowser) RelaunchVisible(ctx context.Context) error {
@@ -597,7 +663,7 @@ func (b *PoolBrowser) relaunchLocked(ctx context.Context, cmd Command) (replaced
 		return false, fmt.Errorf("%w: lease over", ErrBrowserGone)
 	}
 	oldProc, oldPage, oldCancel := b.proc, b.page, b.cancel
-	rctx, rcancel := context.WithCancel(ctx)
+	rctx, rcancel := linkedContext(ctx, b.launchCtx, b.pool.ctx)
 	b.proc, b.page, b.cancel = nil, nil, rcancel
 	b.mu.Unlock()
 
@@ -624,6 +690,24 @@ func (b *PoolBrowser) relaunchLocked(ctx context.Context, cmd Command) (replaced
 	b.mu.Unlock()
 	go b.watch(rctx, proc)
 	return true, nil
+}
+
+// linkedContext returns a context derived from ctx that also ends when any
+// of others ends (context.AfterFunc). Its cancel releases those links.
+func linkedContext(ctx context.Context, others ...context.Context) (context.Context, context.CancelFunc) {
+	c, cancel := context.WithCancel(ctx)
+	stops := make([]func() bool, 0, len(others))
+	for _, o := range others {
+		if o != nil {
+			stops = append(stops, context.AfterFunc(o, cancel))
+		}
+	}
+	return c, func() {
+		for _, stop := range stops {
+			stop()
+		}
+		cancel()
+	}
 }
 
 // singletonNames are the links Chrome keeps in a running profile

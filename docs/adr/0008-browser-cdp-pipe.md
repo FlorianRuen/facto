@@ -152,7 +152,11 @@ the pipe (the io-pipes route below bypasses this):
   - the file is read only after the process has started, at most 256 bytes;
   - strict parse: port 1-65535, path matching `^/devtools/browser/[0-9a-f-]{36}$`;
   - the listening PID must be Chrome's (`GetExtendedTcpTable` through
-    `syscall.NewLazyDLL("iphlpapi.dll")`, no new module);
+    `windows.NewLazySystemDLL("iphlpapi.dll")` of `golang.org/x/sys`, already a direct
+    dependency, no new module), from both the IPv4 and IPv6 listener tables: exactly
+    one listener on the port, bound to `127.0.0.1` (implemented in T7c:
+    `internal/browser/portfile.go`, `porttransport.go`, `portstarter.go`,
+    `portexec_windows.go`);
   - a `Browser.getVersion` handshake succeeds before any secret is sent.
 - The WebSocket is dialled only through `internal/httpx/cdploopback` (Q1, T7.1): the
   literal `127.0.0.1:<port>`, no host name and so no resolver, no proxy (proxy env
@@ -182,6 +186,17 @@ the pipe (the io-pipes route below bypasses this):
   fix needs the standard library only (`AdditionalInheritedHandles`,
   `SetHandleInformation`). The J1 audit (T28) re-rates this HIGH if this wording or the
   issue link below is missing. Recorded in the threat model (`docs/security.md`, T29).
+- **Release gate for Windows support (issue #3):** the browser must run in a Job object
+  (`CreateJobObject` + `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`), so that killing the browser
+  or facto dying ends every Chrome child process too. J1 kills the browser process only
+  (`portexec_windows.go`) and relies on its children exiting with it; Windows is not
+  released until the Job object lands, tracked in
+  https://github.com/FlorianRuen/facto/issues/3.
+- Open point (S1, to confirm on real Chrome in T13/T32): Chrome may be mid-write of
+  `DevToolsActivePort` when facto opens it. The file is parsed once and never re-read, so a
+  partial file fails the launch closed (`ErrPortFile`) rather than being trusted; if real
+  Chrome shows such partial reads, the fix is an atomic-write check or a bounded re-read of a
+  short (not malformed) file, decided then.
 - Retry the pipe on Windows through `SysProcAttr.AdditionalInheritedHandles` and
   `--remote-debugging-io-pipes=<read>,<write>`:
   https://github.com/FlorianRuen/facto/issues/3. chromedp v0.21.0 does exactly this

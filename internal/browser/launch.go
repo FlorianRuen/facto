@@ -30,6 +30,18 @@ type Host struct {
 	Geteuid    func() int                  // os.Geteuid in production; -1 on windows
 	LookupEnv  func(string) (string, bool) // os.LookupEnv in production
 	Log        *slog.Logger                // redacting logger; nil discards
+	// Owner returns the owner uid of an already resolved path (unix). Nil:
+	// a stat-based lookup. Used by Prepare (CheckExecutableAs with
+	// Geteuid()) and by NewPool (base directories). An error fails closed.
+	Owner func(path string) (uid int, err error)
+}
+
+// owner returns h.Owner, or the stat-based lookup when nil.
+func (h Host) owner() func(string) (int, error) {
+	if h.Owner != nil {
+		return h.Owner
+	}
+	return statOwner
 }
 
 // Command is one vetted Chrome invocation.
@@ -45,16 +57,17 @@ type Command struct {
 type StartFunc func(ctx context.Context, cmd Command) error
 
 // Prepare vets the host and options and returns the Command to start, with
-// a nil Stderr: root check first, then CheckExecutable, Flags, CheckFlags
-// and BuildEnv.
+// a nil Stderr: root check first, then CheckExecutableAs (owner checked
+// against h.Geteuid() through h.Owner), Flags, CheckFlags and BuildEnv.
 func Prepare(h Host, opts Options) (Command, error) {
 	if h.Geteuid == nil {
 		return Command{}, fmt.Errorf("%w: effective uid unknown", ErrRunAsRoot)
 	}
-	if h.Geteuid() == 0 {
+	euid := h.Geteuid()
+	if euid == 0 {
 		return Command{}, ErrRunAsRoot
 	}
-	if err := CheckExecutable(h.Executable); err != nil {
+	if err := CheckExecutableAs(h.Executable, euid, h.owner()); err != nil {
 		return Command{}, err
 	}
 	args, err := Flags(opts)

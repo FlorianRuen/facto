@@ -104,20 +104,25 @@ func CheckFlags(goos string, args []string) error {
 
 // mandatorySwitches are the switches every release argv carries on goos:
 // the disposable profile, the resolver allowlist, the WebRTC and DNS
-// prefetch leaks closed, and the CDP transport (pipe, or the port-0
-// fallback on windows, ADR 0008 "Windows (A4)").
+// prefetch leaks closed, the CDP transport (pipe, or the port-0 fallback on
+// windows, ADR 0008 "Windows (A4)") and, on darwin, the mock keychain so
+// Chrome never touches the user's login keychain.
 func mandatorySwitches(goos string) []string {
 	transport := "remote-debugging-pipe"
 	if goos == goosWindows {
 		transport = "remote-debugging-port"
 	}
-	return []string{
+	out := []string{
 		"user-data-dir",
 		"host-resolver-rules",
 		"force-webrtc-ip-handling-policy",
 		"dns-prefetch-disable",
 		transport,
 	}
+	if goos == goosDarwin {
+		out = append(out, "use-mock-keychain")
+	}
+	return out
 }
 
 // parseSwitch splits one argument into its lowercased name and value. ok is

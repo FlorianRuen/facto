@@ -5,6 +5,9 @@ package browser
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io/fs"
+	"os"
 	"syscall"
 )
 
@@ -30,4 +33,45 @@ func pidAlive(pid int) bool {
 	}
 	err := syscall.Kill(pid, 0)
 	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+// checkRuntimeDir requires XDG_RUNTIME_DIR to be a real directory (Lstat:
+// a symlink is refused, never followed) without any group or world bit,
+// owned by h.Geteuid(). Anything else, or a failed lookup, is
+// ErrUnsafeProfileDir: the pool never falls back to <StateDir>/tmp then.
+func checkRuntimeDir(h Host, dir string) error {
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return fmt.Errorf("%w: XDG_RUNTIME_DIR: %w", ErrUnsafeProfileDir, err)
+	}
+	if fi.Mode()&fs.ModeSymlink != 0 || !fi.IsDir() {
+		return fmt.Errorf("%w: XDG_RUNTIME_DIR is not a real directory", ErrUnsafeProfileDir)
+	}
+	if fi.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("%w: XDG_RUNTIME_DIR has mode %#o, want 0700", ErrUnsafeProfileDir, fi.Mode().Perm())
+	}
+	return checkOwnedByEuid(h, dir, "XDG_RUNTIME_DIR")
+}
+
+// checkBaseOwner requires the pool base (already vetted as a real private
+// directory) to be owned by h.Geteuid() exactly.
+func checkBaseOwner(h Host, base string) error {
+	return checkOwnedByEuid(h, base, "pool base")
+}
+
+// checkOwnedByEuid compares the owner of path with h.Geteuid(); root is
+// foreign too. An unknown euid or a failed lookup fails closed.
+func checkOwnedByEuid(h Host, path, what string) error {
+	if h.Geteuid == nil {
+		return fmt.Errorf("%w: effective uid unknown", ErrUnsafeProfileDir)
+	}
+	euid := h.Geteuid()
+	uid, err := h.owner()(path)
+	if err != nil {
+		return fmt.Errorf("%w: owner of the %s: %w", ErrUnsafeProfileDir, what, err)
+	}
+	if uid != euid {
+		return fmt.Errorf("%w: the %s is owned by uid %d, not the current user", ErrUnsafeProfileDir, what, uid)
+	}
+	return nil
 }

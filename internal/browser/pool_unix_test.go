@@ -135,8 +135,10 @@ type poolRig struct {
 	executable  string
 	interactive bool
 	pidAlive    func(int) bool
-	mu          sync.Mutex
-	starts      []started
+	// owner is Host.Owner (T7c). Nil: every path is owned by euid.
+	owner  func(path string) (int, error)
+	mu     sync.Mutex
+	starts []started
 }
 
 func newRig(t *testing.T) *poolRig {
@@ -207,10 +209,15 @@ func (r *poolRig) config() browser.PoolConfig {
 		env["XDG_RUNTIME_DIR"] = r.xdg
 	}
 	euid := r.euid
+	owner := r.owner
+	if owner == nil {
+		owner = func(string) (int, error) { return euid, nil }
+	}
 	return browser.PoolConfig{
 		Host: browser.Host{
 			Executable: r.executable,
 			Geteuid:    func() int { return euid },
+			Owner:      owner,
 			LookupEnv:  mapLookup(env),
 			Log:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 		},

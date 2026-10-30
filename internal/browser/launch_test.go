@@ -149,8 +149,12 @@ func testHost(t *testing.T, log *slog.Logger) browser.Host {
 	return browser.Host{
 		Executable: fakeExecutable(t),
 		Geteuid:    func() int { return 1000 },
-		LookupEnv:  mapLookup(map[string]string{"HOME": "/facto-test/home", "HTTPS_PROXY": "http://proxy.example:3128"}),
-		Log:        log,
+		// T7c (T10 review): the executable owner is checked against
+		// Geteuid; the fixture is owned by the test user, so the owner
+		// lookup reports the host's euid.
+		Owner:     func(string) (int, error) { return 1000, nil },
+		LookupEnv: mapLookup(map[string]string{"HOME": "/facto-test/home", "HTTPS_PROXY": "http://proxy.example:3128"}),
+		Log:       log,
 	}
 }
 
@@ -215,6 +219,12 @@ func TestLaunch_RootRefused(t *testing.T) {
 			t.Parallel()
 			h := testHost(t, nil)
 			h.Geteuid = tc.geteuid
+			if tc.geteuid != nil {
+				// The executable belongs to the euid under test: only the
+				// root refusal is exercised here.
+				euid := tc.geteuid()
+				h.Owner = func(string) (int, error) { return euid, nil }
+			}
 			_, perr := browser.Prepare(h, launchOpts(t))
 			spy := &startSpy{}
 			lerr := browser.Launch(context.Background(), h, launchOpts(t), spy.start)
