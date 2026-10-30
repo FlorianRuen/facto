@@ -24,8 +24,12 @@ type E2EOverrides struct {
 
 // FlagsE2E returns Flags(opts) with the e2e overrides applied. Every
 // loopback host must be an exact entry of opts.AllowedDomains, and every
-// SPKI a base64 SHA-256 digest. The result is refused by the release
-// CheckFlags on purpose; it still never carries a sandbox-weakening switch.
+// SPKI a base64 SHA-256 digest. The resolver rules carry no EXCLUDE: an
+// allowlist entry that is not a loopback host (a wildcard, or an exact host
+// left out) resolves to ~NOTFOUND like any other name, so an e2e browser
+// never looks a name up in the real DNS nor reaches a real supplier (J1
+// T27). The result is refused by the release CheckFlags on purpose; it
+// still never carries a sandbox-weakening switch.
 func FlagsE2E(opts Options, o E2EOverrides) ([]string, error) {
 	args, err := Flags(opts)
 	if err != nil {
@@ -52,12 +56,12 @@ func FlagsE2E(opts Options, o E2EOverrides) ([]string, error) {
 			return nil, fmt.Errorf("%w: loopback host %q is not an exact allowed domain", ErrInvalidDomain, h)
 		}
 		maps = append(maps, "MAP "+h+" "+target)
-		// Chrome checks EXCLUDE before MAP: an excluded host is not mapped.
-		domains = slices.DeleteFunc(domains, func(d string) bool { return d == h })
 	}
 	for i, a := range args {
 		if strings.HasPrefix(a, "--host-resolver-rules=") {
-			args[i] = "--host-resolver-rules=" + resolverRules(maps, domains)
+			// No EXCLUDE: an unmapped allowlist entry must not reach the
+			// real DNS in an e2e build.
+			args[i] = "--host-resolver-rules=" + resolverRules(maps, nil)
 		}
 	}
 	if len(o.TestCASPKI) > 0 {
@@ -81,8 +85,9 @@ type PoolE2E struct {
 
 // WithE2E returns cfg with every launch of its pool built by FlagsE2E and
 // vetted by CheckFlagsE2E: the exact (non-wildcard) entries of the launch's
-// AllowedDomains are mapped to 127.0.0.1:<LoopbackPort>, every other host
-// still resolves to nothing, and the test CA is trusted. A port out of
+// AllowedDomains are mapped to 127.0.0.1:<LoopbackPort>, every other host,
+// wildcard allowlist entries included, resolves to nothing, and the test
+// CA is trusted. A port out of
 // range or a missing or malformed SPKI is refused with ErrForbiddenFlag.
 func WithE2E(cfg PoolConfig, e PoolE2E) (PoolConfig, error) {
 	if e.LoopbackPort < 1 || e.LoopbackPort > 65535 {
@@ -125,7 +130,8 @@ func checkSPKIs(spki []string) error {
 // CheckFlagsE2E is the launch-time check of an e2e argv: the e2e parts
 // must be exactly those of o (each loopback host mapped once to
 // 127.0.0.1[:LoopbackPort], nothing else mapped to a target; the SPKI list
-// present once and equal to o.TestCASPKI when o has one, absent otherwise).
+// present once and equal to o.TestCASPKI when o has one, absent otherwise),
+// and no EXCLUDE resolver rule (it would send that name to the real DNS).
 // Once they are removed, the release CheckFlags vets the rest.
 func CheckFlagsE2E(goos string, args []string, o E2EOverrides) error {
 	g, err := resolveGOOS(goos)
@@ -188,11 +194,14 @@ func CheckFlagsE2E(goos string, args []string, o E2EOverrides) error {
 
 // stripLoopbackMaps removes the "MAP <host> <target>" rules of value, each
 // host of hosts once, and returns the remaining rules. Any other mapping
-// to a target is refused. The value is not echoed.
+// to a target, and any EXCLUDE rule, is refused. The value is not echoed.
 func stripLoopbackMaps(value string, hosts map[string]bool, target string) (string, error) {
 	var rest []string
 	for rule := range strings.SplitSeq(value, ",") {
 		f := strings.Fields(rule)
+		if len(f) > 0 && strings.EqualFold(f[0], "EXCLUDE") {
+			return "", fmt.Errorf("%w: e2e --host-resolver-rules must not send a name to the real DNS", ErrForbiddenFlag)
+		}
 		if len(f) != 3 || !strings.EqualFold(f[0], "MAP") || f[2] == "~NOTFOUND" {
 			rest = append(rest, strings.TrimSpace(rule))
 			continue

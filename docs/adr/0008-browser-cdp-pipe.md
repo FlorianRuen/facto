@@ -334,7 +334,12 @@ the pipe (the io-pipes route below bypasses this):
   - host matching is the same code as `internal/httpx`; it fails closed on an
     unparsable URL, userinfo, a non-https scheme or an IP literal.
   - Only the e2e build may map hosts to loopback. The release check forbids the loopback
-    mapping and the test CA flags, not the `--host-resolver-rules` flag name.
+    mapping and the test CA flags, not the `--host-resolver-rules` flag name. The e2e
+    rules carry no `EXCLUDE` (J1 T27, red-team finding LOW): an allowlist entry that is not
+    mapped to the fake site (a wildcard such as `*.<supplier domain>`, or an exact host left
+    out) resolves to `~NOTFOUND`, so `make e2e` never looks a real supplier up nor reaches
+    it; `CheckFlagsE2E` refuses an e2e argv with an `EXCLUDE` rule. Proof:
+    `TestAttack_E2EWildcardAllowlistNeverReachesRealDNS`, `TestFlagsE2E_NoNameReachesRealDNS`.
 - **WebRTC (J1 T27, red-team finding HIGH).** ICE traffic (STUN, TURN over UDP or TCP)
   goes straight to an IP and port the page names: neither `Fetch` nor the resolver rules
   see it, and the TURN `USERNAME` is page-chosen, a channel for anything the page can
