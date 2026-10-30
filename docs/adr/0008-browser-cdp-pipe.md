@@ -192,6 +192,7 @@ the pipe (the io-pipes route below bypasses this):
   (`portexec_windows.go`) and relies on its children exiting with it; Windows is not
   released until the Job object lands, tracked in
   https://github.com/FlorianRuen/facto/issues/3.
+  Enforced: `.goreleaser.yaml` has no `windows` goos and `make release-e2e-check` (part of `make verify`) refuses one (SEC-J1-11).
 - Open point (S1, to confirm on real Chrome in T13/T32): Chrome may be mid-write of
   `DevToolsActivePort` when facto opens it. The file is parsed once and never re-read, so a
   partial file fails the launch closed (`ErrPortFile`) rather than being trusted; if real

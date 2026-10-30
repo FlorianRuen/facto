@@ -195,6 +195,18 @@ func TestLoadRelease(t *testing.T) {
 		{name: "facto build without main", data: "version: 2\nbuilds:\n  - id: facto\n    binary: facto\n", anyErr: true},
 		{name: "release built with the e2e tag", data: "version: 2\nbuilds:\n  - id: facto\n    main: ./cmd/facto\n    tags: [e2e]\n", anyErr: true},
 		{name: "not yaml", data: "builds: [\n", anyErr: true},
+		// ADR 0008 release gate (issue #3, SEC-J1-11): no Windows release
+		// until the browser runs in a Job object.
+		{
+			name:    "windows release before the Job object gate",
+			data:    "version: 2\nbuilds:\n  - id: facto\n    main: ./cmd/facto\n    goos: [linux, windows]\n    goarch: [amd64]\n",
+			wantErr: errWindowsGated,
+		},
+		{
+			name:    "windows release, scalar goos",
+			data:    "version: 2\nbuilds:\n  - id: facto\n    main: ./cmd/facto\n    goos: windows\n    goarch: [arm64]\n",
+			wantErr: errWindowsGated,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

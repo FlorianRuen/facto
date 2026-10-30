@@ -7,11 +7,12 @@ import (
 )
 
 // TestLoadRelease_Targets: the release targets are goos x goarch of the
-// facto build, read from the goreleaser file.
+// facto build, read from the goreleaser file. Windows is not released until
+// the Job object gate of ADR 0008 (issue #3, SEC-J1-11) lands.
 func TestLoadRelease_Targets(t *testing.T) {
 	t.Parallel()
 	got := realRelease(t).Targets
-	want := []string{"darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64", "windows/amd64", "windows/arm64"}
+	want := []string{"darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64"}
 	slices.Sort(got)
 	if !slices.Equal(got, want) {
 		t.Fatalf("Targets = %q, want %q", got, want)
@@ -30,11 +31,14 @@ func TestLoadRelease_Targets(t *testing.T) {
 // TestGoList_EveryTarget: go list covers every release target, not only the
 // host: internal/fsx pulls golang.org/x/sys/windows on Windows targets only
 // and golang.org/x/sys/unix on the others, and both appear in one listing.
+// The real release has no Windows target while the ADR 0008 gate is open,
+// so the windows targets are added here to keep the target loop exercised.
 func TestGoList_EveryTarget(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	root := repoRoot(t)
 	b := realRelease(t)
+	b.Targets = append(slices.Clone(b.Targets), "windows/amd64", "windows/arm64")
 	pkgs, err := goList(ctx, root, b, b.listPkgsArgs(nil, "./internal/fsx"))
 	if err != nil {
 		t.Fatalf("goList: %v", err)

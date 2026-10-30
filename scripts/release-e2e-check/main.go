@@ -74,6 +74,10 @@ const (
 // errNoBuild: the file has no build with id "facto" (or no builds).
 var errNoBuild = errors.New("release-e2e-check: no facto build in goreleaser config")
 
+// errWindowsGated: the facto build targets Windows while the ADR 0008
+// release gate (browser in a Job object, issue #3) is still open.
+var errWindowsGated = errors.New("release-e2e-check: windows is not released until the Job object gate of ADR 0008 lands (issue #3)")
+
 // selfTestPkgs are the module-relative packages the -tags e2e build must
 // link, each with its Sentinel symbol.
 var selfTestPkgs = []string{"internal/vault/e2ekey", "internal/secret/e2efile"}
@@ -143,8 +147,9 @@ type goreleaserConfig struct {
 }
 
 // loadRelease reads path (YAML, unknown keys ignored). A missing file wraps
-// fs.ErrNotExist; no facto build is errNoBuild; a build without main, with
-// an e2e tag or with a template other than {{ .Version }} is an error.
+// fs.ErrNotExist; no facto build is errNoBuild; a Windows target is
+// errWindowsGated; a build without main, with an e2e tag or with a template
+// other than {{ .Version }} is an error.
 func loadRelease(path string) (releaseBuild, error) {
 	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
@@ -168,6 +173,9 @@ func loadRelease(path string) (releaseBuild, error) {
 		}
 		rb := releaseBuild{Main: b.Main, Env: b.Env, Flags: b.Flags, Tags: b.Tags}
 		for _, goos := range b.Goos {
+			if goos == "windows" {
+				return releaseBuild{}, errWindowsGated
+			}
 			for _, goarch := range b.Goarch {
 				rb.Targets = append(rb.Targets, goos+"/"+goarch)
 			}
