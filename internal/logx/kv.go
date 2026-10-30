@@ -196,25 +196,57 @@ func skipSpaces(s string, i int) int {
 // header value opening with "[" (fmt's rendering of an http.Header, all
 // headers on one line) ends at the next "]" instead of the end of the line.
 //
+// Masks only grow: a masked value (or credential) that holds a sensitive
+// key and its separator whose own value runs past it (token: password: v,
+// Bearer pwd='v', password="a pwd="v") is masked together with that value,
+// and so on down the chain (see extendSpan).
+// The kept value of a Set-Cookie attribute (Path=/ password=v) is scanned
+// for keys like any other text, so a header found there starts its own
+// header-line rule (see cookieSegments).
+//
 // The scan jumps from candidate to
 // candidate (a separator, or a "b" that may start a scheme) with
 // strings.IndexAny; the key before a separator lies between it and the
-// previous separator, and a header line is consumed once, so it runs in
-// time linear in len(s).
+// previous separator, a masked span is searched once more for inner keys,
+// a cookie line's segments are walked once, the line end, the next "]" and
+// the next ";" are cached for the headers nested in it (see headerCache),
+// and the scan never moves back, so it runs in time linear in len(s).
 func maskKeyValues(s string) string {
 	const candidates = ":=bB"
 	var b strings.Builder
-	done := 0 // s[:done] is already in b
+	var hc headerCache
+	done := 0       // s[:done] is already in b
+	cookieEnd := -1 // end of the cookie header value being walked, or -1
+	attrEnd := -1   // end of the kept attribute value being scanned, or -1
 	for i := 0; i < len(s); {
-		p := strings.IndexAny(s[i:], candidates)
+		if cookieEnd >= 0 && attrEnd < 0 {
+			if i >= cookieEnd {
+				cookieEnd = -1
+				continue
+			}
+			done, i, attrEnd = cookieSegments(&b, s, done, i, cookieEnd, &hc)
+			if attrEnd < 0 {
+				cookieEnd = -1
+			}
+			continue
+		}
+		limit := len(s)
+		if attrEnd >= 0 {
+			limit = attrEnd
+		}
+		p := strings.IndexAny(s[i:limit], candidates)
 		if p < 0 {
-			break
+			if attrEnd < 0 {
+				break
+			}
+			i, attrEnd = attrEnd, -1 // the next segment
+			continue
 		}
 		p += i
 		var vs, ve, rest int
 		var ok bool
 		if c := s[p]; c == ':' || c == '=' {
-			vs, ve, rest, ok = valueAfterKey(s, p)
+			vs, ve, rest, ok = valueAfterKey(s, p, &hc)
 		} else {
 			vs, ve, ok = valueAfterScheme(s, p)
 		}
@@ -222,15 +254,43 @@ func maskKeyValues(s string) string {
 			i = p + 1
 			continue
 		}
-		if ve > vs && s[vs:ve] != Mask {
-			b.WriteString(s[done:vs])
-			b.WriteString(Mask)
-			done = ve
+		if ve > vs {
+			grown := extendSpan(s, vs, ve, &hc)
+			if rest > 0 && grown > ve {
+				// A cookie line's first value grew: on to the end of its
+				// segment, so that the walk starts where it would have.
+				grown = max(grown, min(rest, hc.semicolon.find(s, grown, semicolonIndex)))
+			}
+			ve = grown
+			if s[vs:ve] != Mask {
+				done = putMask(&b, s, done, vs, ve)
+			}
 		}
 		i = max(ve, p+1)
-		if rest > ve {
-			done = maskCookieRest(&b, s, done, ve, rest)
-			i = rest
+		switch {
+		case rest > ve: // a cookie line, possibly nested in an attribute value
+			cookieEnd, attrEnd, i = rest, -1, ve
+		case attrEnd >= 0 && i > attrEnd:
+			// The value ran past the attribute's segment: what is left of
+			// the segment it ends in, past the closing quote, is masked like
+			// a bare segment (the walk would have masked it), then the walk
+			// goes on.
+			attrEnd = -1
+			if i < cookieEnd {
+				e := min(cookieEnd, hc.semicolon.find(s, i, semicolonIndex))
+				vs := i
+				for vs < e && (s[vs] == '"' || s[vs] == '\'' || s[vs] == '\\') {
+					vs++ // the closing quote of a quoted value
+				}
+				vs, ve := skipSpaces(s, vs), e
+				for ve > vs && (s[ve-1] == ' ' || s[ve-1] == '\t') {
+					ve--
+				}
+				if ve > vs && s[vs:ve] != Mask {
+					done = putMask(&b, s, done, vs, ve)
+				}
+				i = e
+			}
 		}
 	}
 	if done == 0 {
@@ -238,6 +298,19 @@ func maskKeyValues(s string) string {
 	}
 	b.WriteString(s[done:])
 	return b.String()
+}
+
+// putMask writes s[done:vs] and Mask to b, s[:done] being already in it, and
+// returns ve, the new done. A span right after a Mask, written before or
+// already in s (an earlier pattern's), is merged into it: two adjacent masks
+// would render as "******", which a second Clean masks again (Clean must be
+// idempotent).
+func putMask(b *strings.Builder, s string, done, vs, ve int) int {
+	b.WriteString(s[done:vs])
+	if !strings.HasSuffix(b.String(), Mask) {
+		b.WriteString(Mask)
+	}
+	return ve
 }
 
 // valueAfterScheme returns the span of the credential following the
@@ -295,18 +368,88 @@ func containsLowerASCII(s, sub string) bool {
 	return false
 }
 
+// headerCache remembers the next line break and the next "]" headerValue
+// found, the next ";" of a cookie line and the next end of an unquoted
+// value, so that the headers nested in one cookie line (Cookie: a; Path=
+// Cookie: b; Path=…) do not each scan to the end of the line again.
+type headerCache struct {
+	lineEnd, bracket, semicolon, valueEnd nextIndex
+	// quoted[q][d] caches quotedEnd for quote q ('"' 0, '\'' 1) at
+	// depth d.
+	quoted [2][maxCachedDepth + 1]nextIndex
+	// failClosed, set while extendSpan runs, makes a deeper quoted value
+	// run to the end of its line.
+	failClosed bool
+}
+
+// maxCachedDepth is the deepest quoting (backslashes before the quote)
+// whose value ends are cached.
+const maxCachedDepth = 4
+
+// quotedEnd is quotedEnd(s, k, quote, depth), from a cache up to
+// maxCachedDepth; k follows the opening quote. The closing quotes (and
+// line breaks) a search finds do not depend on where it starts, since a
+// backslash run after an opening quote starts after it, so a search is
+// reused for any later k it covers. Deeper, a failClosed search returns the
+// end of the line, which is never before the real end.
+func (hc *headerCache) quotedEnd(s string, k int, quote byte, depth int) int {
+	if depth > maxCachedDepth {
+		if hc.failClosed {
+			return hc.lineEnd.find(s, k, lineBreakIndex)
+		}
+		return quotedEnd(s, k, quote, depth)
+	}
+	qi := 0
+	if quote == '\'' {
+		qi = 1
+	}
+	return hc.quoted[qi][depth].find(s, k, func(t string) int {
+		if e := quotedEnd(t, 0, quote, depth); e < len(t) {
+			return e
+		}
+		return -1
+	})
+}
+
+// nextIndex is the result of a forward search started at from: at is the
+// first match at or after from, or len(s) when there is none.
+type nextIndex struct {
+	set      bool
+	from, at int
+}
+
+// find returns the first offset at or after k where search (an index
+// function) matches, len(s) when it does not, reusing the last search when
+// it started at or before k and ended at or after it.
+func (n *nextIndex) find(s string, k int, search func(string) int) int {
+	if n.set && n.from <= k && k <= n.at {
+		return n.at
+	}
+	at := len(s)
+	if e := search(s[k:]); e >= 0 {
+		at = k + e
+	}
+	*n = nextIndex{set: true, from: k, at: at}
+	return at
+}
+
+func lineBreakIndex(s string) int { return strings.IndexAny(s, "\r\n") }
+
+func closingBracketIndex(s string) int { return strings.IndexByte(s, ']') }
+
+func semicolonIndex(s string) int { return strings.IndexByte(s, ';') }
+
+// valueEndIndex is the index of the first byte ending an unquoted value
+// (see isValueEnd), or -1.
+func valueEndIndex(s string) int { return strings.IndexAny(s, " \t\r\n&;,\"'`\\<>()[]{}") }
+
 // headerValue returns the bounds of the header value starting at k: up to
 // the end of the line ("\r", "\n" or len(s)), or, when it opens with "[",
 // from after the bracket to the next "]" on the line.
-func headerValue(s string, k int) (start, end int) {
-	end = len(s)
-	if e := strings.IndexAny(s[k:], "\r\n"); e >= 0 {
-		end = k + e
-	}
+func headerValue(s string, k int, hc *headerCache) (start, end int) {
+	end = hc.lineEnd.find(s, k, lineBreakIndex)
 	if k < end && s[k] == '[' {
-		if e := strings.IndexByte(s[k:end], ']'); e >= 0 {
-			end = k + e
-		}
+		end = min(end, hc.bracket.find(s, k, closingBracketIndex))
 		return k + 1, end
 	}
 	return k, end
@@ -319,9 +462,9 @@ func headerValue(s string, k int) (start, end int) {
 // the caller rescans it as a scheme. Header lines (see maskKeyValues): on an
 // authorization line the span covers the value after its Bearer or Basic
 // scheme, or the whole value; on a cookie line rest is the end of the
-// header value, past the first value's end ve, for maskCookieRest (rest is 0
-// otherwise).
-func valueAfterKey(s string, p int) (vs, ve, rest int, ok bool) {
+// header value, past the first value's end ve, for cookieSegments (rest is 0
+// otherwise). hc caches the header value bounds.
+func valueAfterKey(s string, p int, hc *headerCache) (vs, ve, rest int, ok bool) {
 	ke := p
 	for ke > 0 && (s[ke-1] == ' ' || s[ke-1] == '\t') {
 		ke--
@@ -349,7 +492,7 @@ func valueAfterKey(s string, p int) (vs, ve, rest int, ok bool) {
 	}
 	if q < len(s) && (s[q] == '"' || s[q] == '\'') {
 		start := q + 1
-		return start, quotedEnd(s, start, s[q], q-k), 0, true
+		return start, hc.quotedEnd(s, start, s[q], q-k), 0, true
 	}
 	hdr := headerNone
 	if !quotedKey && !preMasked(s, k) {
@@ -357,25 +500,81 @@ func valueAfterKey(s string, p int) (vs, ve, rest int, ok bool) {
 	}
 	switch hdr {
 	case headerAuthorization:
-		vs, ve = authorizationValue(s, k)
+		vs, ve = authorizationValue(s, k, hc)
 		return vs, ve, 0, true
 	case headerCookie:
-		start, end := headerValue(s, k)
-		if start > k { // bracketed: every pair is masked by maskCookieRest
+		start, end := headerValue(s, k, hc)
+		if start > k { // bracketed: every pair is walked by cookieSegments
 			return start, start, end, true
 		}
-		ve = unquotedEnd(s, k)
+		ve = hc.valueEnd.find(s, k, valueEndIndex)
 		return k, ve, end, true
 	case headerNone:
 	}
 	if k >= len(s) || isValueEnd(s[k]) {
 		return k, k, 0, true
 	}
-	end := unquotedEnd(s, k)
+	end := hc.valueEnd.find(s, k, valueEndIndex)
 	if isAuthScheme(s[k:end]) {
 		return k, k, 0, true // rescanned as a scheme
 	}
 	return k, end, 0, true
+}
+
+// extendSpan returns the end of the masked span [vs, ve) grown over the
+// values of the sensitive keys inside it that run past ve: one ending the
+// span (token: password: v, Bearer pwd='v) or opening a quoted value in it
+// (password="a pwd='x" v'), then theirs in turn. A mask therefore never
+// ends before the value of a key it covers, and never shrinks.
+//
+// Every separator and scheme in the span is looked at, the grown part
+// included, as the main scan would have looked at those of the grown part; a
+// header line found there grows the span to the end of its value (cookie
+// line included: the whole of it is masked). Value ends come from caches
+// (see headerCache), and a quoted inner value opened by more than
+// maxCachedDepth backslashes is taken to run to the end of its line (fail
+// closed), so each byte is read a bounded number of times.
+//
+// A grown quoted span ends at its own closing quote again (quotedEnd from
+// the inner end), so that a second Clean, which reads the mask as that
+// quoted value, ends it at the same place.
+func extendSpan(s string, vs, ve int, hc *headerCache) int {
+	var quote byte
+	depth := 0
+	if vs > 0 && (s[vs-1] == '"' || s[vs-1] == '\'') {
+		quote, depth = s[vs-1], backslashesBefore(s, vs-1)
+	}
+	hc.failClosed = true
+	defer func() { hc.failClosed = false }()
+	for i := vs; i < ve; {
+		p := strings.IndexAny(s[i:ve], ":=bB")
+		if p < 0 {
+			break
+		}
+		p += i
+		i = p + 1
+		var ivs, ive, rest int
+		var ok bool
+		if c := s[p]; c == ':' || c == '=' {
+			ivs, ive, rest, ok = valueAfterKey(s, p, hc)
+		} else {
+			ivs, ive, ok = valueAfterScheme(s, p)
+		}
+		if !ok {
+			continue
+		}
+		end := rest    // a whole cookie line, or 0
+		if ive > ivs { // not an empty span (a scheme rescanned by the caller)
+			end = max(end, ive)
+		}
+		if end > ve {
+			ve = end
+			if quote != 0 {
+				ve = hc.quotedEnd(s, end, quote, depth)
+			}
+		}
+	}
+	return ve
 }
 
 // preMasked reports whether the value at k is already Mask alone, followed
@@ -394,8 +593,8 @@ func preMasked(s string, k int) bool {
 // value starting at k (see headerValue): what follows a Bearer or Basic
 // scheme and its spaces, or the whole value. A scheme with nothing after it
 // yields an empty span.
-func authorizationValue(s string, k int) (vs, ve int) {
-	start, end := headerValue(s, k)
+func authorizationValue(s string, k int, hc *headerCache) (vs, ve int) {
+	start, end := headerValue(s, k, hc)
 	j := start
 	for j < end && isKeyByte(s[j]) {
 		j++
@@ -410,16 +609,19 @@ func authorizationValue(s string, k int) (vs, ve int) {
 	return start, end
 }
 
-// maskCookieRest masks s[from:end], the rest of a cookie header value after
+// cookieSegments walks s[from:end], the rest of a cookie header value after
 // its first value: segments are separated by ";", and a segment's value
 // (after "=") or the whole bare segment is masked unless its name is a
-// Set-Cookie attribute. s[:done] is already in b; it returns the new done.
-func maskCookieRest(b *strings.Builder, s string, done, from, end int) int {
+// Set-Cookie attribute. A pair whose name is not a cookie name (see
+// isCookieName) is masked whole: it is a value swallowed by an earlier key
+// (Cookie: password: v =). At the first attribute with a value it stops and
+// returns that value's start as next and its segment's end as attrEnd, for
+// the caller to scan the value for keys (Path=/ password=v) and come back at
+// attrEnd; attrEnd is -1 when the walk reached end. hc caches the next ";".
+// s[:done] is already in b; it returns the new done.
+func cookieSegments(b *strings.Builder, s string, done, from, end int, hc *headerCache) (newDone, next, attrEnd int) {
 	for seg := from; seg < end; {
-		segEnd := end
-		if e := strings.IndexByte(s[seg:end], ';'); e >= 0 {
-			segEnd = seg + e
-		}
+		segEnd := min(end, hc.semicolon.find(s, seg, semicolonIndex))
 		ns := seg
 		for ns < segEnd && (s[ns] == ' ' || s[ns] == '\t' || s[ns] == ',') {
 			ns++
@@ -428,20 +630,40 @@ func maskCookieRest(b *strings.Builder, s string, done, from, end int) int {
 		if eq := strings.IndexByte(name, '='); eq >= 0 {
 			name = name[:eq]
 			vs = skipSpaces(s, ns+eq+1)
+			if !isCookieName(name) { // a swallowed value, not a pair
+				name, vs = "", ns
+			}
 		}
 		name = strings.TrimRight(name, " \t")
 		ve := segEnd
 		for ve > vs && (s[ve-1] == ' ' || s[ve-1] == '\t') {
 			ve--
 		}
-		if ve > vs && !isCookieAttr(name) && s[vs:ve] != Mask {
-			b.WriteString(s[done:vs])
-			b.WriteString(Mask)
-			done = ve
+		switch {
+		case ve <= vs || s[vs:ve] == Mask:
+		case !isCookieAttr(name):
+			done = putMask(b, s, done, vs, ve)
+		default:
+			return done, vs, segEnd
 		}
 		seg = segEnd + 1
 	}
-	return done
+	return done, end, -1
+}
+
+// isCookieName reports whether name is a non-empty run of key bytes, the
+// shape of real cookie names (sid, __Host-sid, _ga.x). Stricter than the RFC
+// 6265 token on purpose: what it refuses is masked.
+func isCookieName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := range len(name) {
+		if !isKeyByte(name[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // isCookieAttr reports whether name is a Set-Cookie attribute (RFC 6265bis

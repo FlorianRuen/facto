@@ -127,7 +127,11 @@ Every facto logger goes through `logx.Handler`.
   a sensitive key is masked, case-insensitively: `password=v`, `password: v`,
   `password = "v"`, JSON `"password":"v"` and re-quoted `\"password\":\"v\"`.
   An unquoted value ends at whitespace or punctuation (`&;,"'<>()[]{}`), a quoted
-  one at its closing quote.
+  one at its closing quote. Masks only grow: a masked value that holds a
+  sensitive key and its separator (`token: password: v`, `Bearer pwd='v'`,
+  `password="a pwd="v"`) is masked together with that key's value, and so on
+  down the chain (`token: ***`), so a key-shaped secret (`password=hunter2Token=`)
+  stays masked whole (SEC-J0-24, found by `FuzzClean` and review).
 - **Authorization schemes:** the credential after a whole word `Bearer` or
   `Basic` is masked (`got Bearer ***`).
 - **Header lines:** when an unquoted key holding `cookie` or `authorization`
@@ -137,7 +141,10 @@ Every facto logger goes through `logx.Handler`.
   one (`Bearer: x`) is masked whole. A cookie line masks its first value, then
   every later cookie value and bare token, keeping only the Set-Cookie
   attributes (`Path`, `Domain`, `Expires`, `Max-Age`, `SameSite`, `Priority`,
-  `Secure`, `HttpOnly`, `Partitioned`). In fmt's one-line rendering of an
+  `Secure`, `HttpOnly`, `Partitioned`), whose values are still scanned for
+  sensitive keys (`Path=/ password=v`); a pair whose name is not a cookie name
+  (letters, digits, `_`, `-`, `.`) is masked whole, and so is the rest of a
+  segment after a value that ran past its `;`. In fmt's one-line rendering of an
   `http.Header` (`map[Cookie:[…] X:[…]]`) the value ends at its `]`. The scan
   runs in linear time.
 - **Parse errors:** the raw URL that `net/url` quotes in its errors is masked,
