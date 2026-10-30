@@ -1,0 +1,14 @@
+# gitleaks fingerprints of synthetic test values already pushed (SEC-J1-9).
+# None of them is a real secret. The literals were rewritten at HEAD so new
+# commits no longer match; history is not rewritten (no force-push), so the
+# old commits keep their hits and are ignored here by exact fingerprint.
+# Tracking issue: SEC-J0-14 (suppressions need an issue number), BLOCKED(H1).
+
+# synthetic test value: JWT {"alg":"HS256"}.{"sub":"synthetic"}.synthetic-sig; history not rewritten (no force-push); SEC-J0-14 tracking issue (BLOCKED H1)
+8295a43250ddab45dbce0f0d5cf787f92e40f41a:internal/connector/attack_test.go:jwt:140
+
+# synthetic test value: fake-site unit password "pw-synthetic-0001"; history not rewritten (no force-push); SEC-J0-14 tracking issue (BLOCKED H1)
+aac8b409e9cb03ed17dfae299c6a4b13a9a37c76:test/e2e/fakesite_unit_test.go:generic-api-key:34
+
+# synthetic test value: pinned-URL redaction marker "synthetic-pin-secret-0f3c"; history not rewritten (no force-push); SEC-J0-14 tracking issue (BLOCKED H1)
+784d28e488f1d32d030e712ec84fe423b978b6f4:internal/httpx/pinned_test.go:generic-api-key:322
