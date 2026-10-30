@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -133,6 +134,48 @@ func TestInstallID_CreationRaceUsesWinner(t *testing.T) {
 				t.Fatalf("Set refs = %v, want the winner's install id", sets)
 			}
 		})
+	}
+}
+
+// TestInstallID_PublishedAfterMissingReadUsesWinner covers the other window
+// of the first-run race: another first run publishes a valid install-id
+// right after this run found none, before it decided whether the file is
+// malformed. The published id is valid, so this run must use it and stay
+// persistent, with no warning. Flaky before the fix in "concurrent first
+// runs agree" (TestInstallID_CreatedOnceAndStable): a store went
+// ephemeral with a "malformed install-id" warning.
+func TestInstallID_PublishedAfterMissingReadUsesWinner(t *testing.T) {
+	t.Parallel()
+	const winner = "fedcba9876543210fedcba9876543210"
+	dir := newStateDir(t)
+	keys := newFakeKeys()
+	first := true
+	s, logs := seamStore(t, dir, vault.Persistent, keys, func(o vault.Options) vault.Options {
+		return vault.WithInstallIDOpen(o, func(state *fsx.Root, name string) (io.ReadCloser, error) {
+			if first {
+				// This run finds no install-id; the winner publishes it
+				// just after.
+				first = false
+				if err := state.WriteNew(t.Context(), name, strings.NewReader(winner)); err != nil {
+					t.Errorf("plant install-id: %v", err)
+				}
+				return nil, fmt.Errorf("synthetic open %s: %w", name, fs.ErrNotExist)
+			}
+			return state.OpenRegular(name)
+		})
+	})
+	if got := readInstallID(t, dir); got != winner {
+		t.Fatalf("install-id = %q, want the winner's %q", got, winner)
+	}
+	if !s.Persistent() {
+		t.Fatalf("Persistent() = false although a valid install-id was published:\n%s", logs.text())
+	}
+	if warns := logs.records(t, slog.LevelWarn); len(warns) != 0 {
+		t.Fatalf("unexpected warnings:\n%s", logs.text())
+	}
+	mustSave(t, s, "edf", "synthetic jar")
+	if _, sets, _ := keys.calls(); len(sets) != 1 || sets[0] != sessionRef(winner, "edf") {
+		t.Fatalf("Set refs = %v, want the winner's install id", sets)
 	}
 }
 

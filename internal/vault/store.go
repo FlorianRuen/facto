@@ -447,8 +447,13 @@ func (s *Store) sweep(ctx context.Context, state *fsx.Root, keyringOK bool) erro
 // ensureInstallID returns the install id, creating it once when missing. It
 // returns "" when the file exists but is malformed (left untouched).
 func (s *Store) ensureInstallID(ctx context.Context, state *fsx.Root) (string, error) {
+	// Presence is checked before the read: checked after, a concurrent first
+	// run publishing its valid id between the two would make a missing file
+	// look malformed and disable persistence. An id published after the
+	// check is either read below or makes the creation fail with ErrExist.
+	present := s.installIDPresent(state)
 	id, err := s.readInstallID(state)
-	if err != nil || id != "" || s.installIDPresent(state) {
+	if err != nil || id != "" || present {
 		return id, err
 	}
 	raw := make([]byte, installIDRaw)

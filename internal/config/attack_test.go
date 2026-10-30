@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/FlorianRuen/facto/internal/config"
+	"github.com/FlorianRuen/facto/internal/cputime"
 	"github.com/FlorianRuen/facto/internal/fsx"
 	"github.com/FlorianRuen/facto/internal/testsecrets"
 )
@@ -53,9 +54,12 @@ func atkBomb() string {
 
 // TestAttack_ConfigYAMLBombsAreRefusedQuickly feeds an alias bomb, deep
 // flow nesting and a huge number of tiny wrongly typed items, all under
-// MaxFileSize. Load must refuse each with ErrInvalid in bounded time.
+// MaxFileSize. Load must refuse each with ErrInvalid in bounded time: at
+// most 5 s of CPU time (package cputime), which a loaded machine cannot
+// exhaust the way it did a 5 s wall-clock deadline, while an unbounded
+// expansion still does. Not parallel: outside Linux cputime measures the
+// whole process.
 func TestAttack_ConfigYAMLBombsAreRefusedQuickly(t *testing.T) {
-	t.Parallel()
 	docs := map[string]string{
 		"billion laughs":      atkBomb(),
 		"deep flow nesting":   "manual: " + strings.Repeat("[", 20000) + strings.Repeat("]", 20000) + "\n",
@@ -65,19 +69,24 @@ func TestAttack_ConfigYAMLBombsAreRefusedQuickly(t *testing.T) {
 	}
 	for name, doc := range docs {
 		t.Run(name, func(t *testing.T) {
-			t.Parallel()
 			if len(doc) > config.MaxFileSize {
 				t.Fatalf("setup: document is %d bytes, over MaxFileSize", len(doc))
 			}
 			p := writeConfig(t, []byte(doc))
+			o := opts(fakeHome(t))
 			var cfg *config.Config
 			var err error
-			done := make(chan struct{})
-			go func() { defer close(done); cfg, err = config.Load(t.Context(), p, opts(fakeHome(t))) }()
-			select {
-			case <-done:
-			case <-time.After(5 * time.Second):
-				t.Fatal("Load did not return within 5s")
+			wall := cputime.Cap(t)
+			cpu, cpuErr := cputime.Within(wall, func() { cfg, err = config.Load(t.Context(), p, o) })
+			if errors.Is(cpuErr, cputime.ErrWallTimeout) {
+				t.Fatalf("Load still running after %v of wall-clock time: hung", wall)
+			}
+			if cpuErr != nil {
+				t.Fatalf("measure CPU time: %v", cpuErr)
+			}
+			t.Logf("Load took %v of CPU", cpu)
+			if cpu > 5*time.Second {
+				t.Fatalf("Load took %v of CPU, want at most 5s", cpu)
 			}
 			if !errors.Is(err, config.ErrInvalid) || cfg != nil {
 				t.Fatalf("Load = %v, %v; want nil config and ErrInvalid", cfg, err)

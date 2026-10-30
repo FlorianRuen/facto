@@ -1,9 +1,7 @@
 package logx_test
 
 import (
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/FlorianRuen/facto/internal/logx"
 )
@@ -55,33 +53,16 @@ func TestClean_MasksWholeCookieAndAuthorizationLines(t *testing.T) {
 
 // TestClean_HeaderLinesLinear feeds 1 MB lines built from header-shaped
 // units; a quadratic scan (one copy per cookie segment) took over a minute.
-// Not parallel on purpose: under -race with coverage each line takes about
-// a second, and running beside TestClean_KeyValueMaskingIsLinear would eat
-// that test's time budget.
+// Not parallel on purpose: outside Linux the budget is the process CPU time
+// (see package cputime), only meaningful while the parallel tests wait.
 func TestClean_HeaderLinesLinear(t *testing.T) {
-	const size = 1 << 20
-	for name, unit := range map[string]string{
+	assertCleanLinear(t, map[string]string{
 		"cookie pairs": "Cookie: a=1; ",
 		"semicolons":   "Cookie: ;;;;;;;;;;;;;;",
 		"auth lines":   "Authorization: x\n",
 		"bracketed":    "Cookie:[a=1; ",
 		"pre-masked":   "Authorization:*** ",
-	} {
-		in := strings.Repeat(unit, size/len(unit))
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			_ = logx.Clean(in)
-		}()
-		timer := time.NewTimer(linearBudget())
-		select {
-		case <-done:
-			timer.Stop()
-		case <-timer.C:
-			t.Errorf("%s: Clean of a 1 MB line still running after %v, want linear time", name, linearBudget())
-			<-done
-		}
-	}
+	})
 }
 
 // TestClean_HeaderLinesInFormattedMaps covers fmt's one-line rendering of an

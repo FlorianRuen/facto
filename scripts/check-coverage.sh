@@ -19,7 +19,15 @@ for pkg in $(go list ./... | grep -v /test/); do
       min=${g##*:}
     fi
   done
-  pct=$(go test -cover "$pkg" 2>/dev/null | sed -n 's/.*coverage: \([0-9.]*\)%.*/\1/p')
+  # A failing package must never vanish silently: show which one failed and
+  # the tail of its output, keep checking the others, then fail the gate.
+  if ! res=$(go test -cover "$pkg" 2>&1); then
+    printf '%-40s FAIL: go test -cover failed, last 200 lines of output:\n' "$short"
+    printf '%s\n' "$res" | tail -n 200
+    fail=1
+    continue
+  fi
+  pct=$(printf '%s\n' "$res" | sed -n 's/.*coverage: \([0-9.]*\)%.*/\1/p')
   [[ -z "$pct" ]] && continue
   printf '%-40s %6s%% (min %s%%)\n' "$short" "$pct" "$min"
   awk -v p="$pct" -v m="$min" 'BEGIN{exit !(p+0 < m+0)}' && fail=1

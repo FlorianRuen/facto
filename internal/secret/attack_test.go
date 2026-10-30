@@ -25,6 +25,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"github.com/FlorianRuen/facto/internal/cputime"
 	"github.com/FlorianRuen/facto/internal/secret"
 	"github.com/FlorianRuen/facto/internal/testsecrets"
 )
@@ -220,8 +221,10 @@ func TestAttack_SecretUnrecoveredPanicNeverPrintsValue(t *testing.T) {
 // name, a path or a second value past ParseRef: Unicode look-alikes, NUL and
 // line breaks, encodings, traversal segments, and a 1 MiB input. Each must
 // be refused quickly with ErrInvalidRef and an error that echoes nothing.
+// "Quickly" is at most 2 s of CPU time (package cputime), which a loaded
+// machine cannot exhaust the way it did a 2 s wall-clock deadline. Not
+// parallel: outside Linux cputime measures the whole process.
 func TestAttack_ParseRefHostileInputs(t *testing.T) {
-	t.Parallel()
 	canary := testsecrets.Canary(t, testsecrets.Password)
 	big := "keyring://facto/" + strings.Repeat("a/", 512<<10) + canary + "/"
 	inputs := map[string]string{
@@ -248,12 +251,16 @@ func TestAttack_ParseRefHostileInputs(t *testing.T) {
 	for name, in := range inputs {
 		var ref secret.Ref
 		var err error
-		done := make(chan struct{})
-		go func() { defer close(done); ref, err = secret.ParseRef(in) }()
-		select {
-		case <-done:
-		case <-time.After(2 * time.Second):
-			t.Fatalf("%s: ParseRef did not return within 2s", name)
+		wall := cputime.Cap(t)
+		cpu, cpuErr := cputime.Within(wall, func() { ref, err = secret.ParseRef(in) })
+		if errors.Is(cpuErr, cputime.ErrWallTimeout) {
+			t.Fatalf("%s: ParseRef still running after %v of wall-clock time: hung", name, wall)
+		}
+		if cpuErr != nil {
+			t.Fatalf("%s: measure CPU time: %v", name, cpuErr)
+		}
+		if cpu > 2*time.Second {
+			t.Fatalf("%s: ParseRef took %v of CPU, want at most 2s", name, cpu)
 		}
 		if !errors.Is(err, secret.ErrInvalidRef) {
 			t.Errorf("%s: ParseRef = %+v, %v; want ErrInvalidRef", name, ref, err)
