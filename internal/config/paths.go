@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"unicode"
 )
 
 // expandHome resolves a path value of key: "~" and "~/…" are relative to
@@ -23,6 +24,24 @@ func expandHome(v, home, key string) (string, error) {
 		return "", invalid(key, `must be an absolute path or start with "~/"`)
 	}
 	return filepath.Clean(v), nil
+}
+
+// browserPathKey is the key of the browser binary path.
+const browserPathKey = "browser.path"
+
+// expandBrowserPath resolves browser.path: empty stays empty (the installed
+// copy is looked up at run time), a value holding a control character is
+// refused, and so is a format character (bidi override, zero-width
+// character, BOM: unicode.Cf), which would make the path display as
+// another; anything else follows expandHome. The value is never quoted.
+func expandBrowserPath(v, home string) (string, error) {
+	if v == "" {
+		return "", nil
+	}
+	if strings.ContainsFunc(v, func(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }) {
+		return "", invalid(browserPathKey, "must not contain control or format characters")
+	}
+	return expandHome(v, home, browserPathKey)
 }
 
 // validatePaths checks output.local and state_dir (ADR 0007 D1).

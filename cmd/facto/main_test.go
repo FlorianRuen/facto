@@ -64,13 +64,17 @@ func newSandbox(t *testing.T) *sandbox {
 	return s
 }
 
-// env returns the injected environment: the sandbox home, a fake clock and
-// an empty process environment.
+// env returns the injected environment: the sandbox home, a fake clock, an
+// empty process environment, no OS keyring (J1 T19: no test reaches the
+// real keyring; sessions fall back to ephemeral with one warning) and no
+// installed browser.
 func (s *sandbox) env() env {
 	return env{
-		Home:      s.home,
-		Clock:     clock.NewFake(runStart),
-		LookupEnv: func(string) (string, bool) { return "", false },
+		Home:             s.home,
+		Clock:            clock.NewFake(runStart),
+		LookupEnv:        func(string) (string, bool) { return "", false },
+		KeyBackend:       noKeyring,
+		InstalledBrowser: noInstalledBrowser,
 	}
 }
 

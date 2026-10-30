@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 
 	"github.com/FlorianRuen/facto/internal/connector"
 	"github.com/FlorianRuen/facto/internal/dest"
@@ -74,6 +75,14 @@ type Deps struct {
 	// Browser is the pool behind Env.Browser, available during Login only;
 	// nil = Env.Browser stays nil. The orchestrator never launches one itself.
 	Browser connector.BrowserPool
+	// Prompt is copied into every connector.Env, and Env.Interactive is
+	// Prompt.Interactive(); nil = Env.Prompt stays nil and Env.Interactive
+	// false.
+	Prompt connector.Prompter
+	// Credentials are the configured secret references of each connector,
+	// by connector id (config.yaml connectors.<id>), copied into its
+	// Env.Credentials. A connector without an entry gets none.
+	Credentials map[string]connector.Credentials
 }
 
 // Orchestrator files documents. It is safe for sequential use; the pipeline
@@ -88,6 +97,10 @@ type Orchestrator struct {
 	secrets  connector.SecretResolver
 	sessions SessionStore
 	browser  connector.BrowserPool
+	prompt   connector.Prompter
+	creds    map[string]connector.Credentials
+	// loginOnly makes runSteps stop after a fresh Login and its save (Login).
+	loginOnly bool
 }
 
 // New validates d and returns an Orchestrator. A missing Index, Dest or
@@ -102,6 +115,13 @@ func New(d Deps) (*Orchestrator, error) {
 	case d.Namer == nil:
 		return nil, fmt.Errorf("%w: no namer", ErrInvalidDeps)
 	}
+	return build(d), nil
+}
+
+// build returns an Orchestrator over d without checking the pipeline
+// dependencies (Index, Dest, Namer), which only Run's fetch loop and
+// IngestInbox use.
+func build(d Deps) *Orchestrator {
 	inner := slog.DiscardHandler
 	if d.Log != nil {
 		inner = d.Log.Handler()
@@ -124,5 +144,7 @@ func New(d Deps) (*Orchestrator, error) {
 		secrets:  d.Secrets,
 		sessions: d.Sessions,
 		browser:  d.Browser,
-	}, nil
+		prompt:   d.Prompt,
+		creds:    maps.Clone(d.Credentials),
+	}
 }

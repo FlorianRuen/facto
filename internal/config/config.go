@@ -81,6 +81,8 @@ type Config struct {
 	Connectors map[string]Connector `yaml:"connectors"` // by connector id
 	Manual     []Manual             `yaml:"manual"`
 	Notify     string               `yaml:"notify"` // desktop or none
+	// Browser configures the Chrome for Testing binary facto drives.
+	Browser Browser `yaml:"browser"`
 
 	// home is Options.Home, kept so that Validate can ignore the home
 	// directory's own components when looking for synced folders.
@@ -121,6 +123,16 @@ type Connector struct {
 	Login    string `yaml:"login"`
 	Password string `yaml:"password"`
 	OTP      string `yaml:"otp"`
+}
+
+// Browser is the browser block. facto has no setting that changes the
+// browser's launch flags: only the binary is configurable.
+type Browser struct {
+	// Path is the Chrome binary: absolute after "~" expansion (same rules
+	// as output.local and state_dir), or empty for the copy installed by
+	// `facto browser install`. Parse is lexical: cmd/facto checks that it
+	// names an existing regular file when a browser is needed.
+	Path string `yaml:"path"`
 }
 
 // Manual is a document the user fetches by hand, with a yearly reminder.

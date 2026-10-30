@@ -588,7 +588,11 @@ connectors:
 manual:
   - { id: impots, name: "Impôts", category: housing, reminder: "10-01" }
 notify: desktop             # desktop, none
+browser:
+  path: ~/chrome/chrome     # optional; default: the copy `facto browser install` installed
 ```
+
+`browser.path` is the only browser setting: absolute or `~/…`, it must name an existing regular file when a browser is needed. No setting changes the browser's launch flags.
 
 **Commands.**
 
@@ -596,7 +600,7 @@ notify: desktop             # desktop, none
 | --- | --- |
 | `facto init` | First-time setup wizard |
 | `facto add <connector>` | Add an account (secret references) |
-| `facto login <connector>` | Interactive login, visible browser window when needed |
+| `facto login <connector>` | Interactive login, visible browser window when needed; one-time codes are read on the terminal without echo; the session is saved encrypted. Needs an interactive terminal (otherwise exit `2`); exit `1` when the supplier refuses the login |
 | `facto collect [--year N \| --since DATE] [--only edf,ileo]` | Collect, normalize, store |
 | `facto status` | State of each connector and last collection date |
 | `facto doctor <connector>` | Check the real flow and diagnose breakage |

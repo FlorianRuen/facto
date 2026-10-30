@@ -137,6 +137,22 @@ func (o *Orchestrator) Run(ctx context.Context, src Connectors, p connector.Peri
 	return out, nil
 }
 
+// Login runs one fresh login of c for `facto login <id>`: as Run does for
+// one connector (ValidateInfo, Env with Deps.NewHTTP, the redacting logger,
+// Deps.Secrets, Deps.Prompt, Deps.Credentials and the login-only browser;
+// panics recovered; cancellation is StateInterrupted), except that no saved
+// session is loaded (Env.Saved is zero), and that it stops once a
+// connector.Persistable session has been Persisted and Saved: List and
+// Fetch are never called. Index, Dest and Namer are not needed and not
+// checked. A Login error ends in the state of the sentinel it wraps,
+// anything else broken; a failed save is a warning and a note, the state
+// stays ok.
+func Login(ctx context.Context, d Deps, c connector.Connector) ConnectorResult {
+	o := build(d)
+	o.loginOnly = true
+	return o.runConnector(ctx, 0, c, connector.Period{})
+}
+
 // connRun is the state of one connector while it runs. It is what the panic
 // recovery reads, so it always holds the latest phase and results.
 type connRun struct {
@@ -240,13 +256,22 @@ func (o *Orchestrator) runSteps(ctx context.Context, c connector.Connector, p co
 		o.fail(ctx, cr, StateBroken, err)
 		return
 	}
-	env := connector.Env{HTTP: client, Log: cr.log, Secrets: o.secrets}
+	env := connector.Env{
+		HTTP:        client,
+		Log:         cr.log,
+		Secrets:     o.secrets,
+		Prompt:      o.prompt,
+		Interactive: o.prompt != nil && o.prompt.Interactive(),
+		Credentials: o.creds[info.ID],
+	}
 	var lb *loginBrowser
 	if o.browser != nil {
 		lb = newLoginBrowser(o.browser, info.AllowedDomains)
 		env.Browser = lb
 	}
-	env.Saved = o.restore(ctx, cr, info.ID)
+	if !o.loginOnly {
+		env.Saved = o.restore(ctx, cr, info.ID)
+	}
 	restored := !env.Saved.IsZero()
 
 	sess, err := o.login(ctx, cr, c, env, lb)
@@ -258,6 +283,9 @@ func (o *Orchestrator) runSteps(ctx context.Context, c connector.Connector, p co
 		return
 	}
 	o.save(ctx, cr, info.ID, sess)
+	if o.loginOnly {
+		return
+	}
 
 	cr.phase = phaseList
 	refs, err := c.List(ctx, sess, p)
