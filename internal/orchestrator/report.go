@@ -55,6 +55,35 @@ type Warning struct {
 type ConnectorStatus struct {
 	ID    string
 	State State
+	Notes NoteList // fixed orchestrator texts (ConnectorResult.Notes)
+}
+
+// NoteList is an immutable, comparable list of report notes: it keeps
+// ConnectorStatus comparable (==, slices.Equal). Notes are fixed
+// orchestrator texts, one line each.
+type NoteList struct{ joined string }
+
+// noteSep separates notes in a NoteList; it never occurs in a fixed note.
+const noteSep = "\x00"
+
+// NewNoteList returns a NoteList holding notes, in order. A NUL inside a
+// note is dropped, and so is a note left empty.
+func NewNoteList(notes []string) NoteList {
+	clean := make([]string, 0, len(notes))
+	for _, n := range notes {
+		if n = strings.ReplaceAll(n, noteSep, ""); n != "" {
+			clean = append(clean, n)
+		}
+	}
+	return NoteList{joined: strings.Join(clean, noteSep)}
+}
+
+// List returns the notes, in order; nil when there are none.
+func (l NoteList) List() []string {
+	if l.joined == "" {
+		return nil
+	}
+	return strings.Split(l.joined, noteSep)
 }
 
 // Report is the outcome of one run.
@@ -69,7 +98,7 @@ type Report struct {
 // their Documents after the existing ones.
 func (r *Report) AddRun(res RunResult) {
 	for _, c := range res.Connectors {
-		r.Connectors = append(r.Connectors, ConnectorStatus{ID: c.ID, State: c.State})
+		r.Connectors = append(r.Connectors, ConnectorStatus{ID: c.ID, State: c.State, Notes: NewNoteList(c.Notes)})
 		r.Documents = append(r.Documents, c.Documents...)
 	}
 }
@@ -99,8 +128,9 @@ type jsonReport struct {
 }
 
 type jsonConn struct {
-	ID    string `json:"id"`
-	State State  `json:"state"`
+	ID    string   `json:"id"`
+	State State    `json:"state"`
+	Notes []string `json:"notes,omitempty"`
 }
 
 type jsonDoc struct {
@@ -141,7 +171,7 @@ func (r Report) JSON() ([]byte, error) {
 		Warnings:      make([]jsonWarning, 0, len(r.Warnings)),
 	}
 	for _, c := range r.Connectors {
-		out.Connectors = append(out.Connectors, jsonConn(c))
+		out.Connectors = append(out.Connectors, jsonConn{ID: c.ID, State: c.State, Notes: c.Notes.List()})
 	}
 	for _, d := range r.Documents {
 		out.Documents = append(out.Documents, jsonDoc(d.cleaned()))
@@ -190,6 +220,9 @@ func (r Report) Text() string {
 		b.WriteString("\nconnectors:\n")
 		for _, c := range r.Connectors {
 			b.WriteString("- " + escapeJoin([]string{string(c.State), c.ID}) + "\n")
+			for _, n := range c.Notes.List() {
+				b.WriteString("  note: " + escape(n) + "\n")
+			}
 		}
 	}
 	if len(r.Documents) > 0 {

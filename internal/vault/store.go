@@ -381,6 +381,56 @@ func (s *Store) Load(ctx context.Context, id string) (secret.Secret, error) {
 	return blob, nil
 }
 
+// Delete removes the saved session of id, typically one the supplier
+// rejected. sessions/ is created 0700 if missing, then, under the
+// sessions/<id>.lock lock, sessions/<id>.sess is removed without being
+// opened and the keyring entry is Deleted. A missing
+// file or key is not an error. An invalid id is ErrInvalidArgument before
+// any file or keyring access. A keyring Delete error wraps ErrKeyring (the
+// file is already gone, so the orphan key opens nothing). When the store is
+// not persistent Delete touches nothing and returns nil.
+func (s *Store) Delete(ctx context.Context, id string) error {
+	if err := checkID(id); err != nil {
+		return err
+	}
+	if !s.persistent {
+		return nil
+	}
+	state, err := fsx.Open(s.stateDir)
+	if err != nil {
+		return fmt.Errorf("vault: delete %s: %w", id, err)
+	}
+	defer func() { _ = state.Close() }()
+	// Like Save, always under the per-connector lock (sessions/ created
+	// 0700 if missing): a Delete never interleaves with a concurrent Save,
+	// so it cannot remove the key a first Save has just Set.
+	if err := state.MkdirPrivate(SessionsDir); err != nil {
+		return fmt.Errorf("vault: delete %s: %w", id, err)
+	}
+	sessions, err := state.OpenDir(SessionsDir)
+	if err != nil {
+		return fmt.Errorf("vault: delete %s: %w", id, err)
+	}
+	defer func() { _ = sessions.Close() }()
+	lock, err := sessions.Lock(ctx, id+lockExt)
+	if err != nil {
+		return fmt.Errorf("vault: delete %s: %w", id, err)
+	}
+	defer func() { _ = lock.Close() }() // nothing written through it
+	if err := sessions.Remove(id + sessExt); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("vault: delete %s: %w", id, err)
+	}
+	return s.deleteKey(ctx, id)
+}
+
+// deleteKey deletes the keyring entry of id; an error wraps ErrKeyring.
+func (s *Store) deleteKey(ctx context.Context, id string) error {
+	if err := s.keys.Delete(ctx, s.ref(id)); err != nil {
+		return fmt.Errorf("vault: delete %s: %w: %w", id, ErrKeyring, err)
+	}
+	return nil
+}
+
 // sweep removes every top-level sessions/*.sess without opening it and, when
 // a keyring is usable and install-id is valid, Deletes the key of each
 // removed file whose stem is a valid connector id, without reading it. It

@@ -239,6 +239,8 @@ sequences and control characters removed, tokens masked, 128 bytes max).
 | `rate_limited` | Too many requests or anti-bot block | Retry later |
 | `interrupted` | The run was canceled while the connector was running | Run `facto collect` again |
 
+A restored session rejected with `auth_failed` (or `needs_login`) is reported `needs_login` and dropped: the saved session was refused, the credentials are untouched.
+
 **Declarative connectors.** For a service that exposes a real API (key, OAuth2 or JSON login), a YAML file is enough, with no recompilation. The engine can read an OpenAPI spec to validate paths and schemas.
 
 ```yaml

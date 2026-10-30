@@ -68,18 +68,26 @@ type Deps struct {
 	// Secrets is copied into every connector.Env; nil = none. The
 	// orchestrator never closes it: its owner (the CLI) does.
 	Secrets connector.SecretResolver
+	// Sessions saves and restores connector sessions; nil (or not
+	// Persistent) = nothing is loaded, saved or deleted.
+	Sessions SessionStore
+	// Browser is the pool behind Env.Browser, available during Login only;
+	// nil = Env.Browser stays nil. The orchestrator never launches one itself.
+	Browser connector.BrowserPool
 }
 
 // Orchestrator files documents. It is safe for sequential use; the pipeline
 // processes one document at a time.
 type Orchestrator struct {
-	idx     Index
-	dst     Destination
-	namer   Namer
-	log     *slog.Logger
-	maxSize int64
-	newHTTP HTTPFactory
-	secrets connector.SecretResolver
+	idx      Index
+	dst      Destination
+	namer    Namer
+	log      *slog.Logger
+	maxSize  int64
+	newHTTP  HTTPFactory
+	secrets  connector.SecretResolver
+	sessions SessionStore
+	browser  connector.BrowserPool
 }
 
 // New validates d and returns an Orchestrator. A missing Index, Dest or
@@ -107,12 +115,14 @@ func New(d Deps) (*Orchestrator, error) {
 		newHTTP = defaultHTTP
 	}
 	return &Orchestrator{
-		newHTTP: newHTTP,
-		idx:     d.Index,
-		dst:     d.Dest,
-		namer:   d.Namer,
-		log:     slog.New(logx.NewHandler(inner, logx.Options{})),
-		maxSize: maxSize,
-		secrets: d.Secrets,
+		newHTTP:  newHTTP,
+		idx:      d.Index,
+		dst:      d.Dest,
+		namer:    d.Namer,
+		log:      slog.New(logx.NewHandler(inner, logx.Options{})),
+		maxSize:  maxSize,
+		secrets:  d.Secrets,
+		sessions: d.Sessions,
+		browser:  d.Browser,
 	}, nil
 }

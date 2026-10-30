@@ -246,5 +246,11 @@ packet parsing, key management and legacy ciphers we do not need for a single-re
 - A format change (new cipher, new AAD, larger cap) bumps the version byte; version 1
   files are then treated as "no session" (re-login), never migrated in clear.
 - `docs/spec.md` now names `sessions/<connector>.sess` and points here.
+- `Store.Delete(ctx, id)` (T18) drops a saved session the supplier rejected: id checked
+  first, `sessions/` created 0700 if missing, then under the per-connector lock (always
+  taken, like Save, so a Delete never races a first Save's key) `sessions/<id>.sess` is
+  removed without being opened and the keyring key Deleted. Missing file or key is not an error; a keyring error
+  wraps `ErrKeyring` (the file is already gone, the orphan key opens nothing); no-op when
+  the store is not persistent.
 - Headless Linux without Secret Service gets ephemeral sessions until the J2 systemd-creds
   key source exists.
