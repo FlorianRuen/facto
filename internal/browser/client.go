@@ -227,9 +227,26 @@ func (c *Client) readLoop() {
 			continue // unknown id, other session or late duplicate
 		}
 		if m.Error != nil {
-			pc.ch <- response{err: fmt.Errorf("%w: code %d", ErrCDP, m.Error.Code)}
+			pc.ch <- response{err: &cdpError{code: m.Error.Code}}
 			continue
 		}
 		pc.ch <- response{result: m.Result}
 	}
+}
+
+// codeMethodNotFound is the JSON-RPC "method not found" error code.
+const codeMethodNotFound = -32601
+
+// cdpError is a CDP error object: only its numeric code is kept (the
+// message may quote page data). It wraps ErrCDP.
+type cdpError struct{ code int64 }
+
+func (e *cdpError) Error() string { return fmt.Sprintf("%v: code %d", ErrCDP, e.code) }
+
+func (e *cdpError) Unwrap() error { return ErrCDP }
+
+// isMethodNotFound reports whether err is a CDP "method not found" answer.
+func isMethodNotFound(err error) bool {
+	var ce *cdpError
+	return errors.As(err, &ce) && ce.code == codeMethodNotFound
 }

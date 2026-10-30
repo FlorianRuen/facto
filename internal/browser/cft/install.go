@@ -172,25 +172,40 @@ func (in *Installer) sweep(ctx context.Context, root *fsx.Root) error {
 	return nil
 }
 
-// verified reports whether <Version>/ is a real directory holding a
-// regular marker with Manifest.SHA256 and a regular executable. Symlinks
-// are never followed: any doubt means a fresh install.
+// verified reports whether root holds a verified install of the pinned
+// build (Verified).
 func (in *Installer) verified(root *fsx.Root) bool {
-	fi, err := root.Lstat(in.m.Version)
-	if err != nil || !fi.IsDir() {
+	return Verified(root, in.m)
+}
+
+// Verified reports whether the install directory root holds a verified
+// install of m: <Version>/ and <Version>/chrome-<Platform>/ real
+// directories, <Version>/MarkerName a regular file holding m.SHA256
+// (surrounding white space ignored) and the executable a regular file.
+// Symlinks are never followed, and nothing is created or modified: any
+// doubt means "not verified".
+func Verified(root *fsx.Root, m Manifest) bool {
+	vr, err := root.OpenDir(m.Version)
+	if err != nil {
 		return false
 	}
-	fi, err = root.Lstat(in.m.Version + "/" + in.executable())
+	defer func() { _ = vr.Close() }() // read-side handle
+	pr, err := vr.OpenDir("chrome-" + m.Platform)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = pr.Close() }() // read-side handle
+	fi, err := pr.Lstat("chrome")
 	if err != nil || !fi.Mode().IsRegular() {
 		return false
 	}
-	f, err := root.OpenRegular(in.m.Version + "/" + MarkerName)
+	f, err := vr.OpenRegular(MarkerName)
 	if err != nil {
 		return false
 	}
 	defer func() { _ = f.Close() }() // read-only
 	b, err := io.ReadAll(io.LimitReader(f, maxMarkerSize))
-	return err == nil && strings.TrimSpace(string(b)) == in.m.SHA256
+	return err == nil && strings.TrimSpace(string(b)) == m.SHA256
 }
 
 // install downloads, verifies and extracts into a private work directory

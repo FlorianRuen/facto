@@ -325,7 +325,10 @@ func (p *Page) onAttached(ev Event) {
 		p.closeTarget(at.TargetInfo.TargetID)
 		return
 	}
-	if err := p.enableChild(at.SessionID, nested); err != nil {
+	// Only a dedicated worker started under a watched page, frame or
+	// worker session has a parent Fetch intercepting its requests.
+	parentFetch := at.TargetInfo.Type == "worker" && p.interceptsChildren(ev.SessionID)
+	if err := p.enableChild(at.SessionID, parentFetch, nested); err != nil {
 		p.release(at.SessionID)
 		p.log.Warn("browser: attached target closed: allowlist not enforceable", "error", err)
 		p.closeTarget(at.TargetInfo.TargetID)
@@ -350,12 +353,42 @@ func (p *Page) closeTarget(targetID string) {
 	}
 }
 
+// interceptsChildren reports whether session is a watched, non-browser
+// session whose attach events the page handles: the page session or a
+// page, frame or worker session attached under it (only those subscribe
+// to Target events, and each has Fetch enabled or inherits its parent's).
+func (p *Page) interceptsChildren(session string) bool {
+	if session == "" {
+		return false
+	}
+	p.subsMu.Lock()
+	defer p.subsMu.Unlock()
+	_, ok := p.sessions[session]
+	return ok
+}
+
 // enableChild turns the interception on for an attached target.
-func (p *Page) enableChild(session string, nested bool) error {
+//
+// Dedicated workers are the one exception (ADR 0008 Hardening #5): Chrome
+// has no Fetch domain on their sessions and answers Fetch.enable with
+// "method not found", while their network requests are intercepted by the
+// parent page session's Fetch. When parentFetch is set (a "worker"
+// attached under a watched page, frame or worker session), that answer is
+// not a failure; setAutoAttach is still sent so nested workers start
+// paused, and a "method not found" to it is tolerated too. Any other
+// error, and that answer anywhere else, fails closed.
+func (p *Page) enableChild(session string, parentFetch, nested bool) error {
 	ctx, cancel := p.enforceCtx()
 	defer cancel()
 	if _, err := p.c.Call(ctx, session, "Fetch.enable", fetchEnableParams); err != nil {
-		return fmt.Errorf("enable fetch: %w", err)
+		if !parentFetch || !isMethodNotFound(err) {
+			return fmt.Errorf("enable fetch: %w", err)
+		}
+		p.log.Debug("browser: dedicated worker has no Fetch domain: its requests are intercepted by the page session")
+		if _, err := p.c.Call(ctx, session, "Target.setAutoAttach", autoAttachParams); err != nil && !isMethodNotFound(err) {
+			return fmt.Errorf("auto attach: %w", err)
+		}
+		return nil
 	}
 	if nested {
 		if _, err := p.c.Call(ctx, session, "Target.setAutoAttach", autoAttachParams); err != nil {

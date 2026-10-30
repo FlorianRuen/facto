@@ -43,8 +43,9 @@ func noKeyring(context.Context, env) (vault.KeyBackend, error) {
 }
 
 // noInstalledBrowser is the sandbox InstalledBrowser seam: nothing was
-// installed with `facto browser install`.
-func noInstalledBrowser(env) (string, bool) { return "", false }
+// installed with `facto browser install`. Signature per J1 T13
+// (browser_installed_test.go): the seam gets the configured state dir.
+func noInstalledBrowser(env, string) (string, bool) { return "", false }
 
 // ------------------------------------------------------------ key backend
 

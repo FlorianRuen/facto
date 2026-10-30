@@ -121,7 +121,7 @@ func collect(ctx context.Context, e env, p collectParams) error {
 	// Collect never needs a browser by itself: without one the pool is
 	// still built (it sweeps stale profiles, A12) and a connector that
 	// launches gets the pool's error.
-	exe, err := resolveBrowserPath(cfg, installedFor(e))
+	exe, err := resolveBrowserPath(cfg, installedFor(e, cfg.StateDir))
 	if err != nil && !errors.Is(err, errNoBrowser) {
 		return configError(err)
 	}
@@ -143,6 +143,7 @@ func collect(ctx context.Context, e env, p collectParams) error {
 	}
 
 	log := slog.New(logx.NewHandler(slog.NewTextHandler(p.stderr, &slog.HandlerOptions{Level: slog.LevelWarn}), logx.Options{}))
+	warnIfStalePin(ctx, e, cfg, exe, log)
 	if cfg.Output.GDrive.Enabled {
 		log.WarnContext(ctx, "output.gdrive is not available in this version: documents are filed locally only")
 	}

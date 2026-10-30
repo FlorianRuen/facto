@@ -59,8 +59,8 @@ type env struct {
 	// availableConnectors.
 	Connectors func() (*connector.Registry, error)
 	// InstalledBrowser returns the Chrome installed by `facto browser
-	// install`; nil = installedBrowser.
-	InstalledBrowser func(e env) (string, bool)
+	// install` under the configured state dir; nil = installedBrowser.
+	InstalledBrowser func(e env, stateDir string) (string, bool)
 	// InstallBrowser installs the Chrome for Testing build of opts and
 	// returns the executable path; nil means installPinnedBrowser (real
 	// download). Test seam: CLI tests never touch the network.

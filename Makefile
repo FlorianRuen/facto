@@ -10,7 +10,7 @@ export ART_DIR := $(CURDIR)/.cache/test-artifacts
 # lint-selftest creates in-tree fixtures that race/lint must not see: never run targets in parallel.
 .NOTPARALLEL:
 
-.PHONY: verify fmt-check lint lint-selftest test race cover e2e e2e-unit chrome leakcheck audit score-check tools lint-actions release-check release-e2e-check
+.PHONY: verify fmt-check lint lint-selftest test race cover e2e e2e-unit e2e-browser-windows chrome leakcheck audit score-check tools lint-actions release-check release-e2e-check
 
 # goreleaser runs from its pinned image (ADR 0001) so its dependencies stay out
 # of tools/go.mod and the osv-scanner scope.
@@ -92,15 +92,25 @@ cover: race
 # .cache/chrome (gitignored, 0700). Idempotent: a verified install is kept
 # without any network I/O. Prints the executable path.
 CHROME_DIR := $(CURDIR)/.cache/chrome
+# The pinned version, read from the single place it is set (cft.Pinned).
+CHROME_VERSION := $(shell sed -n 's/^[[:space:]]*Version:[[:space:]]*"\([^"]*\)",/\1/p' internal/browser/cft/pinned.go)
 
 chrome:
 	mkdir -p .cache
 	$(GO) run ./cmd/facto browser install --dir "$(CHROME_DIR)"
 
+# The real-Chrome isolation checks (J1 T13) need the chrome build tag on top
+# of e2e, so e2e-unit (in verify) never needs a browser.
 e2e: chrome
+	FACTO_E2E_CHROME="$(CHROME_DIR)/$(CHROME_VERSION)/chrome-linux64/chrome" $(GO) test -race -tags e2e,chrome -count=1 -v ./internal/browser/...
 	docker compose -f test/compose.yaml up -d --wait vaultwarden
 	$(GO) test -tags e2e -count=1 -v ./test/e2e/... ; status=$$?; \
 	docker compose -f test/compose.yaml down -v; exit $$status
+
+# Real-Chrome Windows checks (J1 T13/T32): exactly the command of the
+# browser-windows CI job; FACTO_E2E_CHROME names the Chrome to drive.
+e2e-browser-windows:
+	$(GO) test -tags e2e,chrome -count=1 -v -run '^TestChromeWindows_' ./internal/browser/...
 
 leakcheck:
 	./scripts/leakcheck.sh

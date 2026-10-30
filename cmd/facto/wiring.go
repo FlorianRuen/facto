@@ -8,11 +8,14 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/FlorianRuen/facto/internal/browser"
+	"github.com/FlorianRuen/facto/internal/browser/cft"
 	"github.com/FlorianRuen/facto/internal/config"
 	"github.com/FlorianRuen/facto/internal/connector"
 	"github.com/FlorianRuen/facto/internal/fsx"
@@ -99,18 +102,50 @@ func resolveBrowserPath(cfg *config.Config, installed func() (string, bool)) (st
 	return "", errNoBrowser
 }
 
-// installedBrowser is the location `facto browser install` (T12) installs
-// Chrome for Testing in. Until that command exists nothing is ever
-// installed: it reports ("", false).
-func installedBrowser(env) (string, bool) { return "", false }
+// installedBrowser returns the executable of the Chrome for Testing build
+// `facto browser install` verified under <stateDir>/chrome (cft.Verified:
+// no symlink below stateDir followed, marker holding the pinned SHA-256),
+// and ("", false) for anything else or on a platform without a pinned
+// build. It never creates or modifies anything.
+func installedBrowser(_ env, stateDir string) (string, bool) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" || stateDir == "" {
+		return "", false
+	}
+	m := cft.Pinned()
+	state, err := fsx.Open(stateDir)
+	if err != nil {
+		return "", false
+	}
+	defer func() { _ = state.Close() }() // read-side handle
+	dir, err := state.OpenDir(browserSubdir)
+	if err != nil {
+		return "", false
+	}
+	defer func() { _ = dir.Close() }() // read-side handle
+	if !cft.Verified(dir, m) {
+		return "", false
+	}
+	return filepath.Join(stateDir, browserSubdir, m.Version, "chrome-"+m.Platform, "chrome"), true
+}
 
-// installedFor returns the InstalledBrowser seam of e bound to e.
-func installedFor(e env) func() (string, bool) {
+// installedFor returns the InstalledBrowser seam of e bound to e and the
+// configured state dir.
+func installedFor(e env, stateDir string) func() (string, bool) {
 	f := e.InstalledBrowser
 	if f == nil {
 		f = installedBrowser
 	}
-	return func() (string, bool) { return f(e) }
+	return func() (string, bool) { return f(e, stateDir) }
+}
+
+// warnIfStalePin warns once (cft.WarnIfStale) when the browser in use is
+// the installed pinned build: never for a browser.path set in config.yaml
+// (user-supplied, unpinned), never when no browser was found.
+func warnIfStalePin(ctx context.Context, e env, cfg *config.Config, exe string, log *slog.Logger) {
+	if cfg.Browser.Path != "" || exe == "" {
+		return
+	}
+	cft.WarnIfStale(ctx, log, e.Clock, cft.Pinned())
 }
 
 // sessionMode maps cfg.Sessions to the vault mode; any other value is an

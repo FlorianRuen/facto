@@ -276,6 +276,24 @@ the pipe (the io-pipes route below bypasses this):
   - `Target.setAutoAttach` with `waitForDebuggerOnStart` and `flatten`; each new target
     gets `Fetch.enable` before `Runtime.runIfWaitingForDebugger`;
   - the page target is created at `about:blank`, `Fetch` is enabled, then it navigates;
+  - dedicated workers (J1 T13, measured on Chrome for Testing 156.0.8078.80): Chrome has
+    no `Fetch` domain on `worker` sessions and answers `Fetch.enable` with `-32601`
+    (method not found), while `Target.setAutoAttach` on them succeeds. Their network
+    requests are intercepted by the parent page session's `Fetch` (Chrome applies the
+    frame's interception to its dedicated workers). So, for `targetInfo.type == "worker"`
+    only, and only when the worker is attached under a watched page, frame or worker
+    session (never on the browser session, where no parent `Fetch` covers it: there it is
+    closed unresumed), a `-32601` to `Fetch.enable` is not a failure: facto still sends
+    `setAutoAttach` (a `-32601` there is tolerated too), then
+    `runIfWaitingForDebugger`. Any other error, and `-32601` on any other target type
+    (iframe, page, service or shared worker), still closes the target unresumed. Proof:
+    `TestFetch_OffAllowlistBlockedInPageWorkerAndNestedWorker` (tags `e2e,chrome`) makes
+    the page, a dedicated worker and a nested worker each fetch an off-allowlist host and
+    the loopback server by IP: all three run, every request is blocked and counted in
+    `BlockedHosts`, the loopback server sees no `/leak` request. Unit twin:
+    `TestFetch_WorkerWithoutFetchRelyOnParent`. Residual risk: a Chrome release that
+    stops applying page interception to dedicated workers; the e2e test catches it on
+    every pin bump (`make e2e`).
   - second layer, release builds too, derived from the same allowlist:
     `--host-resolver-rules="MAP * ~NOTFOUND, EXCLUDE <allowlist>"`,
     `--force-webrtc-ip-handling-policy=disable_non_proxied_udp`, `--dns-prefetch-disable`;
@@ -326,7 +344,7 @@ Grouped by J1 task. Names are binding for the test-writer.
 - **T11/T12** (Chrome for Testing): `TestInstall_ManifestPinsExactURLAndHost`,
   `TestInstall_RedirectOffHostRefused`, `TestInstall_SizeMismatchRefusedBeforeHash`,
   `TestPinnedChrome_AgeWarning` (fake clock).
-- **T13** (real Chrome, `e2e` tag): `TestChromeWindows_OriginHeaderRejected`,
+- **T13** (real Chrome, `e2e` and `chrome` tags; `make e2e`, never `make verify`): `TestChromeWindows_OriginHeaderRejected`,
   `TestChromeWindows_NonLoopbackHostHeaderRejected`, `TestChromeWindows_ListenerPIDIsChrome`,
   `TestFetch_WebSocketOffAllowlistBlocked`, `TestChrome_NoCookieStoreWrittenAfterLogin`,
   `TestChrome_NoListeningSocket` (whole process tree, TCP4 and TCP6).

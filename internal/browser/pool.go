@@ -745,6 +745,16 @@ func (b *PoolBrowser) current() (*Page, error) {
 	return b.page, nil
 }
 
+// BlockedHosts returns Page.BlockedHosts of the lease's current page (a
+// copy); empty once the lease is over.
+func (b *PoolBrowser) BlockedHosts() map[string]int {
+	pg, err := b.current()
+	if err != nil {
+		return map[string]int{}
+	}
+	return pg.BlockedHosts()
+}
+
 // Navigate implements connector.Browser.
 func (b *PoolBrowser) Navigate(ctx context.Context, url string) error {
 	pg, err := b.current()

@@ -79,7 +79,9 @@ func runFake(mode string) int {
 	case modeParent:
 		return runParent()
 	default:
-		return 2
+		// Real-Chrome helper modes (chrome_e2e_linux_test.go); 2 when the
+		// mode is unknown to this build.
+		return runE2EMode(mode)
 	}
 }
 

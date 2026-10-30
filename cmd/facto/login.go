@@ -88,7 +88,7 @@ func login(ctx context.Context, e env, p loginParams) error {
 	if err != nil {
 		return err
 	}
-	exe, err := resolveBrowserPath(cfg, installedFor(e))
+	exe, err := resolveBrowserPath(cfg, installedFor(e, cfg.StateDir))
 	if err != nil {
 		return configError(err)
 	}
@@ -102,6 +102,7 @@ func login(ctx context.Context, e env, p loginParams) error {
 		return &exitError{code: orchestrator.ExitAttention, err: fmt.Errorf("secrets: %w", err)}
 	}
 	log := slog.New(logx.NewHandler(slog.NewTextHandler(p.stderr, &slog.HandlerOptions{Level: slog.LevelWarn}), logx.Options{}))
+	warnIfStalePin(ctx, e, cfg, exe, log)
 
 	res, persistent, runErr := loginWith(ctx, e, cfg, loginDeps{conn: conn, secrets: secrets, log: log, browserPath: exe, prompt: p.prompt})
 	if cerr := closeErr("secrets", secrets.CloseAll()); cerr != nil {
