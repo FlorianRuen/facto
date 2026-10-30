@@ -1,0 +1,59 @@
+name: fakeprovider-browser-isolation
+description: >
+  J1 T24 (ADR 0008, A4, A12). While the login page is served, facto's
+  process tree is probed: Chrome has no TCP listener and no
+  --remote-debugging-port/-address (CDP over a pipe only), and its
+  disposable --user-data-dir is gone after the run. Chrome leaves nothing
+  outside that profile under HOME: no ~/.config, ~/.cache, ~/.local or
+  ~/.pki (NSS database), and the profile parent <state>/tmp is empty and
+  0700. All values are synthetic.
+setup:
+  - path: config.yaml
+    content: |
+      output:
+        local: ~/Invoices
+      state_dir: ~/.facto
+      notify: none
+      sessions: persistent
+      connectors:
+        fakeprovider:
+          enabled: true
+          category: services
+          login: e2e://fp/login
+          password: e2e://fp/password
+args: [collect, --config, "{{home}}/config.yaml", --year, "2026", --non-interactive]
+fakesite:
+  mode: password
+  login: fp/login
+  password: fp/password
+  invoices:
+    - { id: FP-2026-0001, contract: C-1, issued_at: 2026-03-14, amount_cents: 8412, currency: EUR, fixture: edf-invoice.pdf }
+secrets:
+  fp/login: "user-{{canary:token}}"
+  fp/password: "{{canary:password}}"
+expect:
+  exit: 0
+  stdout:
+    contains: ["- ok fakeprovider", "summary: filed 1"]
+  absent:
+    - .config
+    - .cache
+    - .local
+    - .pki
+  files:
+    - path: .facto/sessions/fakeprovider.sess
+      mode: "0600"
+  trees:
+    - path: Invoices
+      private: true
+    - path: .facto
+      private: true
+    - path: .facto/tmp
+      private: true
+      entries: []
+  requests:
+    - { method: POST, host: www.fakeprovider.test, path: /login, count: 1 }
+    - { host: evil.test, count: 0 }
+  browser:
+    no_cdp_port: true
+    profile_removed: true

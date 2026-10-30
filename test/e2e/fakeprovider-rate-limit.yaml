@@ -1,0 +1,82 @@
+name: fakeprovider-rate-limit
+description: >
+  J1 T24. The site answers 429 (Retry-After: 3600) to its first API
+  request. Run 1 logs in through the browser, the list gets the 429: the
+  connector is rate_limited, nothing is requested after the 429 (no retry,
+  Retry-After never slept on, no PDF), exit 1 (spec "Exit codes"). The
+  session of the successful login is sealed. Run 2 restores it, the probe
+  gets the 429: rate_limited again with exactly one request, no browser,
+  and the session is kept (a rate limit is no refusal of the session). All
+  values are synthetic.
+setup:
+  - path: config.yaml
+    content: |
+      output:
+        local: ~/Invoices
+      state_dir: ~/.facto
+      notify: none
+      sessions: persistent
+      connectors:
+        fakeprovider:
+          enabled: true
+          category: services
+          login: e2e://fp/login
+          password: e2e://fp/password
+args: [collect, --config, "{{home}}/config.yaml", --year, "2026", --non-interactive]
+fakesite:
+  mode: rate-limit
+  login: fp/login
+  password: fp/password
+  rate_limit_after: 0
+  invoices:
+    - { id: FP-2026-0001, contract: C-1, issued_at: 2026-03-14, amount_cents: 8412, currency: EUR, fixture: edf-invoice.pdf }
+secrets:
+  fp/login: "user-{{canary:token}}"
+  fp/password: "{{canary:password}}"
+expect:
+  exit: 1
+  stdout:
+    contains: ["- rate_limited fakeprovider"]
+    not_contains: ["- ok fakeprovider", "- filed ", needs_login]
+  stderr:
+    not_contains: ["keyring unavailable", "sessions are ephemeral"]
+  files:
+    - path: .facto/sessions/fakeprovider.sess
+      mode: "0600"
+  absent:
+    - Invoices/2026
+    - .config/google-chrome-for-testing
+  trees:
+    - path: .facto
+      private: true
+    - path: .facto/tmp
+      private: true
+      entries: []
+  requests:
+    - { method: POST, host: www.fakeprovider.test, path: /login, count: 1 }
+    - { method: GET, host: www.fakeprovider.test, path: /account, count: 1 }
+    - { method: GET, host: www.fakeprovider.test, path: /api/invoices, status: 429, count: 1 }
+    - { path: /api/*, count: 1 }
+    - { status: 429, count: 1 }
+    # Nothing after the 429.
+    - { status: 429, last: true }
+    - { path: "/api/invoices/*", count: 0 }
+    - { host: evil.test, count: 0 }
+  browser: { no_cdp_port: true, profile_removed: true }
+repeat:
+  expect:
+    exit: 1
+    stdout:
+      contains: ["- rate_limited fakeprovider"]
+      not_contains: ["- ok fakeprovider", "- filed ", needs_login]
+    files:
+      - path: .facto/sessions/fakeprovider.sess
+        mode: "0600"
+    trees:
+      - path: .facto
+        private: true
+    requests:
+      # Restored session, probe rate limited: one request, no browser.
+      - { method: GET, host: www.fakeprovider.test, path: /api/me, status: 429, count: 1 }
+      - { count: 1 }
+      - { path: /login*, count: 0 }

@@ -429,6 +429,8 @@ func (s *fakeSite) serveWWW(w http.ResponseWriter, r *http.Request) {
 		}
 	case r.URL.Path == "/login" && r.Method == http.MethodPost:
 		s.loginPost(w, r)
+	case r.URL.Path == workerPath && r.Method == http.MethodGet:
+		serveWorker(w)
 	case r.URL.Path == "/login/captcha" && r.Method == http.MethodGet:
 		s.hook(r)
 		s.page(w, captchaTmpl, nil)
@@ -453,6 +455,8 @@ func (s *fakeSite) serveSSO(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case s.opts.Mode != ModeSSORedirect:
 		http.NotFound(w, r)
+	case r.URL.Path == workerPath && r.Method == http.MethodGet:
+		serveWorker(w)
 	case r.URL.Path == "/login" && r.Method == http.MethodGet:
 		s.loginForm(w, r, false)
 	case r.URL.Path == "/login" && r.Method == http.MethodPost:
@@ -460,6 +464,13 @@ func (s *fakeSite) serveSSO(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// serveWorker serves the login pages' worker script: static, no session,
+// no cookie.
+func serveWorker(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	_, _ = w.Write([]byte(workerJS))
 }
 
 func (s *fakeSite) hook(r *http.Request) {
@@ -751,14 +762,55 @@ func (s *fakeSite) page(w http.ResponseWriter, tmpl *template.Template, data map
 	_ = tmpl.Execute(w, data)
 }
 
-// Pages. Every login page also tries to load an off-allowlist resource
-// (A11): the browser must block it, the request log proves it did.
-const pageHead = `<!doctype html><html><head><meta charset="utf-8"><title>Fake Provider</title></head><body>
+// workerPath is the same-origin dedicated worker script of the login pages
+// (J1 T24): a cross-origin Worker URL is refused by Chrome itself, so the
+// worker is served by the page's own host and tries evil.test from inside.
+const workerPath = "/login/worker.js"
+
+// workerJS is the worker script: one fetch to evil.test, then a message to
+// the page whatever the outcome (blocked or not), so the page can settle.
+const workerJS = `fetch("https://evil.test/worker", {mode: "no-cors", credentials: "omit"})
+  .catch(function () {})
+  .finally(function () { postMessage("settled"); });
+`
+
+// Pages. Every login page also tries to reach the off-allowlist evil.test
+// (A11) through each kind of subresource a page can start: an img, a
+// fetch, a WebSocket and a fetch from a same-origin dedicated worker. The
+// browser must block them all, the request log proves it did. Login forms
+// are served hidden and revealed only once every attempt settled (and the
+// DOM is parsed), so a login can never win a race against them (J1 T24).
+const pageHead = `<!doctype html><html><head><meta charset="utf-8"><title>Fake Provider</title>
+<script>
+(function () {
+  var tries = [];
+  tries.push(fetch("https://evil.test/fetch", {mode: "no-cors", credentials: "omit"}));
+  tries.push(new Promise(function (done) {
+    try {
+      var ws = new WebSocket("wss://evil.test/ws");
+      ws.onopen = ws.onerror = ws.onclose = function () { try { ws.close(); } catch (e) {} done(); };
+    } catch (e) { done(); }
+  }));
+  tries.push(new Promise(function (done) {
+    try {
+      var w = new Worker("/login/worker.js");
+      w.onmessage = w.onerror = function () { w.terminate(); done(); };
+    } catch (e) { done(); }
+  }));
+  tries.push(new Promise(function (done) {
+    if (document.readyState !== "loading") { done(); return; }
+    document.addEventListener("DOMContentLoaded", function () { done(); });
+  }));
+  Promise.allSettled(tries).then(function () {
+    document.querySelectorAll("form[hidden]").forEach(function (f) { f.hidden = false; });
+  });
+})();
+</script></head><body>
 <img src="{{.Evil}}" alt="" width="1" height="1">
 `
 
 var (
-	loginTmpl = template.Must(template.New("login").Parse(pageHead + `<form id="login-form" method="post" action="/login">
+	loginTmpl = template.Must(template.New("login").Parse(pageHead + `<form id="login-form" hidden method="post" action="/login">
 {{if .Error}}<p id="login-error">Invalid credentials</p>{{end}}
 <input type="hidden" name="csrf_token" value="{{.CSRF}}">
 <label>Login <input id="username" name="username" autocomplete="off"></label>
@@ -768,7 +820,7 @@ var (
 
 	// changedLoginTmpl is the site-changed form: same flow, every
 	// contract selector and field name renamed.
-	changedLoginTmpl = template.Must(template.New("changed").Parse(pageHead + `<form id="signin-form" method="post" action="/login">
+	changedLoginTmpl = template.Must(template.New("changed").Parse(pageHead + `<form id="signin-form" hidden method="post" action="/login">
 <input type="hidden" name="csrf_token" value="{{.CSRF}}">
 <label>Login <input id="user-id" name="user_id"></label>
 <label>Password <input id="secret-word" name="secret_word" type="password"></label>

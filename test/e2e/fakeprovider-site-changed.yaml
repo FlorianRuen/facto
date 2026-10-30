@@ -1,0 +1,57 @@
+name: fakeprovider-site-changed
+description: >
+  J1 T24. The site renamed every login selector (#signin-form, #user-id,
+  #secret-word, #signin-go). facto waits (bounded) for the contract's
+  #login-form, gives up and marks the connector broken; the error it logs
+  names the missing selector. No secret is typed after the detection: the
+  changed form is never posted (zero POST), no API request, no session
+  sealed, exit 1. All values are synthetic.
+setup:
+  - path: config.yaml
+    content: |
+      output:
+        local: ~/Invoices
+      state_dir: ~/.facto
+      notify: none
+      sessions: persistent
+      connectors:
+        fakeprovider:
+          enabled: true
+          category: services
+          login: e2e://fp/login
+          password: e2e://fp/password
+args: [collect, --config, "{{home}}/config.yaml", --year, "2026", --non-interactive]
+fakesite:
+  mode: site-changed
+  login: fp/login
+  password: fp/password
+  invoices:
+    - { id: FP-2026-0001, contract: C-1, issued_at: 2026-03-14, amount_cents: 8412, currency: EUR, fixture: edf-invoice.pdf }
+secrets:
+  fp/login: "user-{{canary:token}}"
+  fp/password: "{{canary:password}}"
+expect:
+  exit: 1
+  stdout:
+    contains: ["- broken fakeprovider"]
+    not_contains: ["- ok fakeprovider", "- filed "]
+  stderr:
+    contains: ["#login-form"]
+  absent:
+    - .facto/sessions/fakeprovider.sess
+    - Invoices/2026
+    - .config/google-chrome-for-testing
+  trees:
+    - path: .facto
+      private: true
+    - path: .facto/tmp
+      private: true
+      entries: []
+  requests:
+    - { method: GET, host: www.fakeprovider.test, path: /login, count: 1 }
+    - { method: POST, count: 0 }
+    - { path: /account, count: 0 }
+    - { path: /api/*, count: 0 }
+    - { host: sso.fakeprovider.test, count: 0 }
+    - { host: evil.test, count: 0 }
+  browser: { no_cdp_port: true, profile_removed: true }
