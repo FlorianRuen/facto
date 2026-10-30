@@ -22,7 +22,7 @@ websites themselves.
 | Cookie theft through the automated browser (CDP port) | CDP over a pipe, else random 127.0.0.1 port, short browser life | Not started (J1) |
 | Reading the Chromium profile | Disposable 0700 profile, deleted after login | Not started (J1) |
 | Reading persisted sessions | AEAD-encrypted sessions, key in keyring or password manager; `sessions: ephemeral` | Not started (J1, `internal/vault`) |
-| Leak through sync | Refuse a state dir inside the output folder or a synced folder | Done: `internal/config` (ADR 0007, D1, lexical) and `cmd/facto` (output folder, symlinks followed); synced-folder detection is name-based, see limitations |
+| Leak through sync | Refuse a state dir inside the output folder or a synced folder | Done: `internal/config` (ADR 0007, D1, lexical) and `cmd/facto` (output folder and synced folders, symlinks followed, SEC-J0-17); synced-folder detection is name-based, see limitations |
 | Leak in logs, reports, errors | `Secret` type, redaction by key and pattern, no HTTP bodies logged | Done: redacting logger, clean reports, `secret.Secret` (`internal/secret`), config errors never echo values |
 | Leak through the command line | No secret in argv; subprocess-only environment | Done in `internal/secret/bitwarden`; no CLI flag takes a secret. The resolver is not called by `collect` yet (J1) |
 | Leak through a memory dump | `RLIMIT_CORE=0`, `PR_SET_DUMPABLE=0` on Linux | Done in `internal/proc`, called first by the CLI on every run; Linux only |
@@ -458,8 +458,9 @@ Files dropped in `inbox/` are untrusted input.
   and duplicate keys but not `<<` merge keys, anchors or aliases. A merge key
   can therefore set a key twice without a duplicate-key error.
 - **State dir sync detection is name-based.** A synced folder with an unusual
-  name, or reached through a symlink, is not detected. Only the "inside the
-  output folder" rule follows symlinks.
+  name is not detected. A known one reached through a symlink is: before the
+  state dir is created, `cmd/facto` runs the same name test on the path with
+  its symlinks (and those of the home directory) resolved (SEC-J0-17).
 - **Config permissions are not checked on Windows**, like fsx.
 - **Process hardening is Linux-only.** On macOS and Windows, core dumps and
   debugger attach are left to the OS defaults.

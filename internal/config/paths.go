@@ -78,6 +78,16 @@ func within(p, dir string) bool {
 	return err == nil && filepath.IsLocal(rel)
 }
 
+// SyncedFolder reports whether dir is inside a folder that a sync client
+// uploads, with the rules of Validate's state_dir check (see syncedFolder).
+// Lexical: a caller that resolved symlinks gives the resolved dir and the
+// resolved home.
+func SyncedFolder(dir, home string) bool { return syncedFolder(dir, home) }
+
+// Home returns the home directory the config was parsed with
+// (Options.Home, cleaned), against which "~" was expanded.
+func (c *Config) Home() string { return c.home }
+
 // syncedFolder reports whether dir is inside a folder that a sync client
 // uploads, by looking for the folder names those clients create, on whole
 // path components and case-insensitively. When dir is under home, the home

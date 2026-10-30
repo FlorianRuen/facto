@@ -211,7 +211,7 @@ func collectInto(ctx context.Context, e env, cfg *config.Config, d collectDeps, 
 	}
 	// Before the index creates the state dir: config.Validate only compared
 	// the path text, and output.local may be a symlink.
-	if err := checkStateDirOutside(cfg.StateDir, cfg.Output.Local); err != nil {
+	if err := checkStateDirOutside(cfg.StateDir, cfg.Output.Local, cfg.Home()); err != nil {
 		return false, err
 	}
 

@@ -192,13 +192,15 @@ func loginWith(ctx context.Context, e env, cfg *config.Config, d loginDeps) (res
 }
 
 // prepareStateDir creates the state dir 0700 when missing (its parent must
-// exist), after checking, when the output folder exists, that it is not
-// physically inside it.
+// exist), after checking that, once symlinks are followed, it is not inside
+// a synced folder nor, when the output folder exists, physically inside it.
 func prepareStateDir(cfg *config.Config) error {
 	if _, err := os.Stat(cfg.Output.Local); err == nil {
-		if err := checkStateDirOutside(cfg.StateDir, cfg.Output.Local); err != nil {
+		if err := checkStateDirOutside(cfg.StateDir, cfg.Output.Local, cfg.Home()); err != nil {
 			return err
 		}
+	} else if _, err := checkStateDirNotSynced(cfg.StateDir, cfg.Home()); err != nil {
+		return err
 	}
 	if err := ensureDir(cfg.StateDir, noFollowLink); err != nil {
 		return fmt.Errorf("state dir: %w", err)
