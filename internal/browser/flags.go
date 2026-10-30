@@ -20,6 +20,15 @@ type Options struct {
 	AllowedDomains []string // connector Info().AllowedDomains (A11)
 	Visible        bool     // headful window; otherwise --headless=new
 	AllowProxy     bool     // true only when FACTO_ALLOW_PROXY is exactly "1"
+
+	// privateDir is the per-launch private area (absolute, clean): Chrome's
+	// XDG_CONFIG_HOME and XDG_CACHE_HOME are <privateDir>/config and
+	// <privateDir>/cache, so nothing lands in the user's ~/.config or
+	// ~/.cache. "" = none (BuildEnv only). Set by the Pool only.
+	privateDir string
+	// tempDir is Chrome's TMPDIR (absolute, clean); "" = the inherited
+	// one. Set by the Pool only.
+	tempDir string
 }
 
 const (

@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/FlorianRuen/facto/internal/connector"
@@ -31,6 +32,12 @@ const (
 	runtimeSubdir = "facto" // <XDG_RUNTIME_DIR>/facto
 	stateSubdir   = "tmp"   // <StateDir>/tmp
 	profilePrefix = "profile-"
+	// areaPrefix names the per-launch private area t<pid>.<n> next to the
+	// profile: Chrome's XDG config and cache dirs and, when its
+	// SingletonSocket path fits, its TMPDIR. Kept short for that path.
+	areaPrefix = "t"
+	// maxAreaAttempts bounds the search for a free t<pid>.<n> name.
+	maxAreaAttempts = 1000
 )
 
 // personalProfiles are the browser profile directories, relative to HOME,
@@ -125,6 +132,9 @@ type Pool struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	closeGrace time.Duration
+
+	// areaSeq numbers the private areas of this process (t<pid>.<n>).
+	areaSeq atomic.Uint64
 }
 
 var _ connector.BrowserPool = (*Pool)(nil)
@@ -328,6 +338,9 @@ func (p *Pool) sweep(ctx context.Context, base string, alive func(int) bool) {
 	removed, failed := 0, 0
 	for _, e := range ents {
 		pid, ok := profilePid(e.Name())
+		if !ok {
+			pid, ok = areaPid(e.Name())
+		}
 		if !ok || e.Type()&fs.ModeSymlink != 0 || !e.IsDir() || alive(pid) {
 			continue
 		}
@@ -341,6 +354,37 @@ func (p *Pool) sweep(ctx context.Context, base string, alive func(int) bool) {
 		p.log.InfoContext(ctx, "browser: stale profiles swept",
 			slog.Int("removed", removed), slog.Int("failed", failed))
 	}
+}
+
+// areaPid parses t<pid>.<n>: pid a positive decimal, n a non-empty
+// decimal.
+func areaPid(name string) (int, bool) {
+	rest, ok := strings.CutPrefix(name, areaPrefix)
+	if !ok {
+		return 0, false
+	}
+	digits, seq, ok := strings.Cut(rest, ".")
+	if !ok || !isDecimal(digits) || !isDecimal(seq) {
+		return 0, false
+	}
+	pid, err := strconv.Atoi(digits)
+	if err != nil || pid <= 0 {
+		return 0, false
+	}
+	return pid, true
+}
+
+// isDecimal reports a non-empty run of ASCII digits.
+func isDecimal(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := range len(s) {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // profilePid parses profile-<pid>-<random>: pid is a positive decimal
@@ -386,13 +430,17 @@ func (p *Pool) Launch(ctx context.Context, opts connector.LaunchOptions) (connec
 	p.inflight.Add(1)
 	p.mu.Unlock()
 	defer p.inflight.Done()
-	profile, err := p.newProfile()
+	area, err := p.newArea()
 	if err != nil {
 		return nil, err
 	}
-	b, err := p.launchOn(ctx, profile, opts)
+	profile, err := p.newProfile()
 	if err != nil {
-		return nil, errors.Join(err, p.removeProfile(profile))
+		return nil, errors.Join(err, p.removeProfile(area))
+	}
+	b, err := p.launchOn(ctx, profile, area, opts)
+	if err != nil {
+		return nil, errors.Join(err, p.removeProfile(profile), p.removeProfile(area))
 	}
 	p.mu.Lock()
 	closed := p.closed
@@ -408,9 +456,9 @@ func (p *Pool) Launch(ctx context.Context, opts connector.LaunchOptions) (connec
 
 // launchOn starts the first browser of a lease on profile. On error nothing
 // runs; the caller removes the profile.
-func (p *Pool) launchOn(ctx context.Context, profile string, opts connector.LaunchOptions) (*PoolBrowser, error) {
+func (p *Pool) launchOn(ctx context.Context, profile, area string, opts connector.LaunchOptions) (*PoolBrowser, error) {
 	domains := slices.Clone(opts.AllowedDomains)
-	cmd, err := p.prepare(profile, domains, opts.Visible)
+	cmd, err := p.prepare(profile, area, domains, opts.Visible)
 	if err != nil {
 		return nil, err
 	}
@@ -421,7 +469,7 @@ func (p *Pool) launchOn(ctx context.Context, profile string, opts connector.Laun
 		return nil, err
 	}
 	b := &PoolBrowser{
-		pool: p, profile: profile, domains: domains, launchCtx: ctx,
+		pool: p, profile: profile, area: area, domains: domains, launchCtx: ctx,
 		proc: proc, page: page, cancel: cancel,
 		done: make(chan struct{}),
 	}
@@ -441,8 +489,47 @@ func (p *Pool) newProfile() (string, error) {
 	return dir, nil
 }
 
-// removeProfile deletes a profile of the base, never following a symlink.
+// newArea creates the per-launch private area t<pid>.<n> directly under
+// the base, with its XDG subdirs, all 0700. On Linux only ("" elsewhere):
+// XDG_* and the SingletonSocket are Linux Chrome's. The name is created
+// exclusively (fsx MkdirNew): one already present, whatever it is, is
+// skipped for the next number, never reused.
+func (p *Pool) newArea() (string, error) {
+	if runtime.GOOS != goosLinux {
+		return "", nil
+	}
+	root, err := fsx.Open(p.base)
+	if err != nil {
+		return "", fmt.Errorf("%w: private area: %w", ErrUnsafeProfileDir, err)
+	}
+	defer func() { _ = root.Close() }() // directories only, nothing to flush
+	prefix := areaPrefix + strconv.Itoa(os.Getpid()) + "."
+	for range maxAreaAttempts {
+		name := prefix + strconv.FormatUint(p.areaSeq.Add(1), 10)
+		err := root.MkdirNew(name)
+		if errors.Is(err, fs.ErrExist) {
+			continue // taken: never reuse
+		}
+		if err != nil {
+			return "", fmt.Errorf("%w: private area: %w", ErrUnsafeProfileDir, err)
+		}
+		dir := filepath.Join(p.base, name)
+		for _, x := range privateXDG {
+			if err := root.MkdirPrivate(name + "/" + x.sub); err != nil {
+				return "", errors.Join(fmt.Errorf("%w: private area: %w", ErrUnsafeProfileDir, err), p.removeProfile(dir))
+			}
+		}
+		return dir, nil
+	}
+	return "", fmt.Errorf("%w: private area: no free name", ErrUnsafeProfileDir)
+}
+
+// removeProfile deletes a profile (or a private area) of the base, never
+// following a symlink. "" is a no-op.
 func (p *Pool) removeProfile(dir string) error {
+	if dir == "" {
+		return nil
+	}
 	if filepath.Dir(dir) != p.base {
 		return fmt.Errorf("%w: profile outside the pool base", ErrUnsafeProfileDir)
 	}
@@ -453,10 +540,18 @@ func (p *Pool) removeProfile(dir string) error {
 	return nil
 }
 
-// prepare builds the vetted Command for profile.
-func (p *Pool) prepare(profile string, domains []string, visible bool) (Command, error) {
+// prepare builds the vetted Command for profile and the private area
+// (TMPDIR there only when Chrome's SingletonSocket path fits; otherwise
+// the inherited TMPDIR, which Prepare checks in turn).
+func (p *Pool) prepare(profile, area string, domains []string, visible bool) (Command, error) {
+	tmp := ""
+	if area != "" && socketPathFits(area) {
+		tmp = area
+	}
 	return prepareWith(p.host, Options{
 		ProfileDir:     profile,
+		privateDir:     area,
+		tempDir:        tmp,
 		AllowedDomains: domains,
 		Visible:        visible,
 		AllowProxy:     ProxyAllowed(p.host.LookupEnv),
@@ -551,6 +646,7 @@ func (p *Pool) forget(b *PoolBrowser) {
 type PoolBrowser struct {
 	pool    *Pool
 	profile string
+	area    string // private area next to the profile; "" off Linux
 	domains []string
 	// launchCtx is the Launch context: it bounds every browser of the
 	// lease, the visible one of RelaunchVisible included.
@@ -621,7 +717,7 @@ func (b *PoolBrowser) teardown(ctx context.Context) error {
 		if cancel != nil {
 			cancel()
 		}
-		b.closeErr = b.pool.removeProfile(b.profile)
+		b.closeErr = errors.Join(b.pool.removeProfile(b.profile), b.pool.removeProfile(b.area))
 		b.opMu.Unlock()
 		b.pool.forget(b)
 		close(b.done)
@@ -648,7 +744,7 @@ func (b *PoolBrowser) RelaunchVisible(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("relaunch browser: %w", err)
 	}
-	cmd, err := b.pool.prepare(b.profile, b.domains, true)
+	cmd, err := b.pool.prepare(b.profile, b.area, b.domains, true)
 	if err != nil {
 		return err
 	}

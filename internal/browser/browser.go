@@ -31,4 +31,9 @@ var (
 	ErrNoUsableSandbox = errors.New("browser: chrome has no usable sandbox")
 	// ErrLaunchFailed: any other start failure.
 	ErrLaunchFailed = errors.New("browser: chrome launch failed")
+	// ErrSocketPathTooLong: the TMPDIR Chrome would get leaves its
+	// SingletonSocket path (<TMPDIR>/org.chromium.Chromium.XXXXXX/
+	// SingletonSocket) over the unix socket path limit (107 bytes on
+	// Linux): Chrome would exit at once. Checked before Chrome starts.
+	ErrSocketPathTooLong = errors.New("browser: chrome singleton socket path too long")
 )

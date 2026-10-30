@@ -271,6 +271,28 @@ the pipe (the io-pipes route below bypasses this):
 - **Environment.** Chrome gets an allowlisted environment, built like `inherited()` in
   `internal/secret/bitwarden/exec.go`. Proxy variables are never passed.
   `--no-proxy-server` is set unless `FACTO_ALLOW_PROXY=1`.
+- **Chrome state outside the profile (J1 T23).** On Linux each launch gets a private 0700
+  area `t<pid>.<n>` next to its profile under the pool base (removed with the profile, also
+  on a failed launch, and swept like a stale profile when its pid is dead).
+  `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `XDG_DATA_HOME` and `XDG_STATE_HOME` point into it
+  (`config/`, `cache/`, `data/`, `state/`), so Chrome writes nothing under the user's
+  `~/.config` (its `Crash Reports` database), `~/.cache` (fontconfig, dconf) or `~/.local`;
+  `HOME` and the display variables are kept so a visible window keeps working (fonts in
+  `~/.fonts` and the system font dirs still load; user fonts under `~/.local/share/fonts`
+  do not). The area name is created exclusively (`fsx` `MkdirNew`): an existing
+  `t<pid>.<n>` is skipped for the next number, never reused. `TMPDIR` is the area itself when Chrome's SingletonSocket path
+  (`<TMPDIR>/org.chromium.Chromium.XXXXXX/SingletonSocket`) fits the 107-byte unix socket
+  limit; otherwise the inherited `TMPDIR` (or `/tmp`) is kept. Whichever `TMPDIR` Chrome
+  gets, a path over the limit fails the launch before Chrome starts with
+  `ErrSocketPathTooLong`, naming the fix (set `XDG_RUNTIME_DIR`, or a shorter `TMPDIR` or
+  `state_dir`), never a cryptic "browser gone". `--disable-crash-reporter` and
+  `--disable-breakpad` are in the base flags on every OS. Proof:
+  `TestChrome_NothingWrittenUnderHome` (tags `e2e,chrome`), `TestPool_PrivateAreaNextToProfile`,
+  `TestPool_SocketPathTooLongFailsBeforeStart`. Not covered by that HOME tree test: the
+  visible relaunch (`RelaunchVisible`, interactive `facto login`), which reuses the same
+  area through the same environment builder but runs headful (GTK, a display server,
+  possibly the desktop's dconf); it is checked by unit tests only. macOS keeps its own per-user temp dir
+  (Chrome reads `NSTemporaryDirectory`, not `TMPDIR`); Windows is unchanged.
 - **In-browser allowlist (A11).** `Fetch` alone misses WebSocket, WebRTC, DNS prefetch and
   requests from other targets (iframes, workers, service workers, pop-ups). So:
   - `Target.setAutoAttach` with `waitForDebuggerOnStart` and `flatten`; each new target

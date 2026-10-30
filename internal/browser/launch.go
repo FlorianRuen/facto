@@ -101,11 +101,38 @@ func prepareWith(h Host, opts Options, policy *argvPolicy) (Command, error) {
 	if err := check(opts, args); err != nil {
 		return Command{}, err
 	}
-	cmd := Command{Path: h.Executable, Args: args, Env: BuildEnv(h.LookupEnv)}
+	env, err := launchEnv(h.LookupEnv, opts)
+	if err != nil {
+		return Command{}, err
+	}
+	cmd := Command{Path: h.Executable, Args: args, Env: env}
 	if policy != nil {
 		cmd.checkArgs = func(a []string) error { return policy.check(opts, a) }
 	}
 	return cmd, nil
+}
+
+// launchEnv returns Chrome's environment for opts: BuildLaunchEnv over the
+// private dirs, each vetted like ProfileDir (ErrNoProfileDir), then the
+// SingletonSocket length check (ErrSocketPathTooLong).
+func launchEnv(lookup func(string) (string, bool), opts Options) ([]string, error) {
+	goos, err := resolveGOOS(opts.GOOS)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range []string{opts.privateDir, opts.tempDir} {
+		if d == "" {
+			continue
+		}
+		if err := checkProfileDir(goos, d); err != nil {
+			return nil, fmt.Errorf("private launch dir: %w", err)
+		}
+	}
+	env := BuildLaunchEnv(lookup, opts.privateDir, opts.tempDir)
+	if err := checkSocketPath(goos, env); err != nil {
+		return nil, err
+	}
+	return env, nil
 }
 
 // Launch prepares the Command and starts it exactly once: a failure is

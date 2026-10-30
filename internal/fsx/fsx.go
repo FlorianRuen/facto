@@ -395,6 +395,24 @@ func (r *Root) MkdirPrivate(name string) error {
 	return nil
 }
 
+// MkdirNew creates the single component name with mode exactly 0700,
+// failing with an error wrapping fs.ErrExist when anything (directory,
+// file, symlink) is already there: unlike MkdirPrivate it never reuses an
+// existing entry. A name with a separator, "." or ".." is refused.
+func (r *Root) MkdirNew(name string) error {
+	if err := checkComponent(name); err != nil {
+		return err
+	}
+	if err := r.root.Mkdir(name, dirPerm); err != nil {
+		return fmt.Errorf("fsx mkdir new %q: %w", name, err)
+	}
+	// The umask may have narrowed the mode; force exactly 0700.
+	if err := r.root.Chmod(name, dirPerm); err != nil {
+		return errors.Join(fmt.Errorf("fsx mkdir new %q: chmod: %w", name, err), r.root.Remove(name))
+	}
+	return nil
+}
+
 // AppendPrivate appends data to name, creating it 0600 if missing. It refuses
 // (ErrInsecurePerms) to append to an existing file with group/world bits and
 // leaves it unchanged. A missing parent wraps fs.ErrNotExist.
