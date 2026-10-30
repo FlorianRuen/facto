@@ -1,8 +1,8 @@
 {
-  "date": "2026-10-29",
-  "milestone": "J0",
-  "commit": "8c1a85f707d05d85d4b962ce0a6f183f15b45646",
-  "total": 88,
+  "date": "2026-10-30",
+  "milestone": "J1",
+  "commit": "cb765d761beb5f8dcc3185ea06061bfe953d142c",
+  "total": 85,
   "categories": [
     {
       "id": 1,
@@ -20,7 +20,7 @@
       "id": 3,
       "name": "Browser isolation",
       "max": 15,
-      "score": 15
+      "score": 12
     },
     {
       "id": 4,
@@ -32,25 +32,25 @@
       "id": 5,
       "name": "Network boundary",
       "max": 10,
-      "score": 9
+      "score": 8
     },
     {
       "id": 6,
       "name": "File system",
       "max": 10,
-      "score": 7
+      "score": 8
     },
     {
       "id": 7,
       "name": "Input handling",
       "max": 10,
-      "score": 8
+      "score": 9
     },
     {
       "id": 8,
       "name": "Dependencies and build",
       "max": 10,
-      "score": 7
+      "score": 6
     },
     {
       "id": 9,
@@ -174,7 +174,7 @@
       "id": "SEC-J0-14",
       "category": 8,
       "severity": "low",
-      "location": "internal/secret/bitwarden/exec.go:40, test/e2e/e2e_test.go:88, test/e2e/e2e_test.go:263, osv-scanner.toml:1-4",
+      "location": "internal/secret/bitwarden/exec.go:40, scripts/release-e2e-check/main.go:518, internal/browser/client.go:157, internal/browser/page.go:291, internal/browser/pool_windows.go:26, 49 test-file suppressions, osv-scanner.toml:1-4, .gitleaksignore, osv-scanner.toml, tools/osv-scanner.toml (cite SEC-J0-14 instead of an issue number)",
       "status": "open"
     },
     {
@@ -198,7 +198,8 @@
       "category": 6,
       "severity": "low",
       "location": "internal/config/paths.go:67",
-      "status": "open"
+      "status": "fixed",
+      "regression_test": "TestCheckStateDirOutside_SymlinkIntoDropboxRefused, TestPrepareStateDir_SyncedTargetRefusedWithoutOutputFolder"
     },
     {
       "id": "SEC-J0-18",
@@ -233,7 +234,7 @@
       "id": "SEC-J0-22",
       "category": 1,
       "severity": "low",
-      "location": "cmd/facto/collect.go:101",
+      "location": "cmd/facto/collect.go:145-157, cmd/facto/login.go:104-112, test/e2e (no Vaultwarden scenario)",
       "status": "open"
     },
     {
@@ -241,14 +242,16 @@
       "category": 7,
       "severity": "low",
       "location": "internal/secret/keyring/keyring.go:54",
-      "status": "open"
+      "status": "fixed",
+      "regression_test": "TestKeyring_GetHonoursContext, TestKeyring_SetHonoursContext, TestKeyring_DeleteHonoursContext, TestKeyring_BackendCallsAreBounded, TestResolver_CloseAllNotBlockedByHungProvider"
     },
     {
       "id": "SEC-J0-24",
       "category": 7,
       "severity": "low",
       "location": "internal/secret/ref.go:51, internal/config/load.go:80, internal/logx/kv.go",
-      "status": "open"
+      "status": "fixed",
+      "regression_test": "FuzzParseRef, FuzzParse, FuzzClean, FuzzClean_KeyShapedValue, TestClean_MasksValueAfterSwallowedKey"
     },
     {
       "id": "SEC-J0-25",
@@ -269,6 +272,138 @@
       "category": 8,
       "severity": "medium",
       "location": ".github/workflows/release.yml:20, .github/workflows/security.yml:18-19, .github/workflows/ci.yml:17",
+      "status": "open"
+    },
+    {
+      "id": "SEC-J1-1",
+      "category": 5,
+      "severity": "high",
+      "location": "internal/browser/flags.go:64-80, internal/browser/webrtc.go",
+      "status": "fixed",
+      "regression_test": "TestAttack_ChromeWebRTCToIPLiteral, TestChrome_WebRTCBlockedInCrossSiteFrame, TestChrome_NoWebRTCConstructorsInAnyDocument, TestFlags_WebRTCPolicyReachesChrome, TestCheckFlags_WebRTCPolicyMandatoryAndNotWeakened"
+    },
+    {
+      "id": "SEC-J1-2",
+      "category": 3,
+      "severity": "low",
+      "location": "internal/browser/freeze.go, internal/browser/page.go (TypeSecret)",
+      "status": "fixed",
+      "regression_test": "TestPage_TypeSecretFreezesPageScripts, TestPage_TypeSecretRefusedWhenScriptsCannotBeFrozen, TestPage_FrameAttachedDuringFreezeStartsFrozen, TestAttack_ChromeFocusSwapNeverDeliversToCrossOriginFrame"
+    },
+    {
+      "id": "SEC-J1-3",
+      "category": 5,
+      "severity": "low",
+      "location": "internal/browser/fetch.go:288-416",
+      "status": "fixed",
+      "regression_test": "TestFetch_SharedWorkerNestedFailClosed, TestAttack_SharedWorkerGetsAutoAttachBeforeResume, TestAttack_ChromeSharedWorkerNestedWorkerFetchBlocked"
+    },
+    {
+      "id": "SEC-J1-4",
+      "category": 5,
+      "severity": "low",
+      "location": "internal/browser/flags_e2e.go",
+      "status": "fixed",
+      "regression_test": "TestFlagsE2E_NoNameReachesRealDNS, TestAttack_E2EWildcardAllowlistNeverReachesRealDNS"
+    },
+    {
+      "id": "SEC-J1-5",
+      "category": 5,
+      "severity": "low",
+      "location": "internal/browser/page.go (Navigate)",
+      "status": "fixed",
+      "regression_test": "TestPage_NavigatePortRules"
+    },
+    {
+      "id": "SEC-J1-6",
+      "category": 2,
+      "severity": "medium",
+      "location": "test/e2e harness, cmd/facto keyring backend (e2e build)",
+      "status": "fixed",
+      "regression_test": "TestSandboxEnv_NeverReachesTheUserSessionBus, TestAttack_E2EBuildNeverReachesTheSessionBus, TestAttack_E2EBuildKeyringRefsNeverReachTheSessionBus, TestKeyringBackend_E2ENeverTheOSKeyring"
+    },
+    {
+      "id": "SEC-J1-7",
+      "category": 3,
+      "severity": "medium",
+      "location": "internal/browser/pool.go:546 (prepare), internal/browser/launch.go, internal/browser/env.go",
+      "status": "fixed",
+      "regression_test": "TestChrome_NothingWrittenUnderHome, TestFlags_NoCrashReporting, TestBuildLaunchEnv_PrivateDirs, TestPool_StaleAreasSwept"
+    },
+    {
+      "id": "SEC-J1-8",
+      "category": 3,
+      "severity": "medium",
+      "location": "internal/browser/flags.go:114-116, internal/browser/portstarter.go, internal/browser/portexec_windows.go, docs/adr/0008-browser-cdp-pipe.md:180-188 (issue #3)",
+      "status": "accepted",
+      "regression_test": "TestFlags_WindowsPortIsZeroOnly, TestPortTransport_DialsLoopbackOnly, TestPortTransport_ClosedRightAfterLogin, TestAttack_PortFilePointingOffLoopbackRefused (real Windows TestChromeWindows_DebugPortLoopbackOnly not run: T32 BLOCKED(H1))"
+    },
+    {
+      "id": "SEC-J1-9",
+      "category": 8,
+      "severity": "medium",
+      "location": "internal/connector/attack_test.go:141-145, internal/httpx/pinned_test.go:322-325, test/e2e/fakesite_unit_test.go:36, .gitleaksignore",
+      "status": "fixed",
+      "regression_test": "make audit gitleaks gate (security/scanners.json gitleaks), .github/workflows/security.yml gitleaks step"
+    },
+    {
+      "id": "SEC-J1-10",
+      "category": 8,
+      "severity": "low",
+      "location": "tools/osv-scanner.toml, tools/doc.go",
+      "status": "fixed",
+      "regression_test": "plain osv-scanner --recursive . (exit 0), make audit osv-scanner gate"
+    },
+    {
+      "id": "SEC-J1-11",
+      "category": 3,
+      "severity": "medium",
+      "location": ".goreleaser.yaml:19, scripts/release-e2e-check/main.go (loadRelease, errWindowsGated)",
+      "status": "fixed",
+      "regression_test": "TestLoadRelease (windows release before the Job object gate, windows release scalar goos), TestLoadRelease_Targets"
+    },
+    {
+      "id": "SEC-J1-12",
+      "category": 3,
+      "severity": "low",
+      "location": "internal/browser/cft/pinned.go:8-14, :25-26",
+      "status": "open"
+    },
+    {
+      "id": "SEC-J1-13",
+      "category": 1,
+      "severity": "low",
+      "location": "cmd/facto/secrets.go:36-38, cmd/facto/collect.go:148-151, cmd/facto/login.go:108-111",
+      "status": "fixed",
+      "regression_test": "TestCollect_ResolverClosedOnPanic, TestLogin_ResolverClosedOnPanic, TestCollect_ResolverClosedOnSuccessErrorAndSignal"
+    },
+    {
+      "id": "SEC-J1-14",
+      "category": 5,
+      "severity": "low",
+      "location": "internal/browser/flags.go:104-106, docs/adr/0008-browser-cdp-pipe.md:368-369",
+      "status": "open"
+    },
+    {
+      "id": "SEC-J1-15",
+      "category": 7,
+      "severity": "low",
+      "location": "internal/browser/pipe.go, internal/browser/client.go, internal/httpx/cdploopback/conn.go, internal/browser/portfile.go, internal/browser/tcptable.go, internal/browser/fetch.go:224",
+      "status": "open"
+    },
+    {
+      "id": "SEC-J1-16",
+      "category": 10,
+      "severity": "medium",
+      "location": "docs/security.md:21-34, docs/security.md:482-515, docs/security.md:700-815",
+      "status": "fixed",
+      "regression_test": "auditor review per milestone (docs/security.md 'State at J1'; every cited test name exists)"
+    },
+    {
+      "id": "SEC-J1-17",
+      "category": 8,
+      "severity": "low",
+      "location": ".github/workflows/release.yml:17-21",
       "status": "open"
     }
   ],
