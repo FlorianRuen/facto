@@ -356,6 +356,21 @@ the pipe (the io-pipes route below bypasses this):
 - **Secret typing.** Just before `TypeSecret` types, facto checks that
   `document.activeElement` is the expected input in the main frame, that focus is not in
   an iframe, and that the page origin is https and allowlisted. Otherwise it refuses.
+  Script freeze (J1 T27, red-team finding LOW): a page timer moving the focus to a
+  cross-origin frame between that check and `Input.insertText` used to get the value
+  typed into the frame (detected afterwards, but delivered: 4 of 6 parallel workers on
+  Chrome for Testing 156). Page scripts are now disabled with
+  `Emulation.setScriptExecutionDisabled` on the page session and on every out-of-process
+  frame session (a frame attached meanwhile is frozen before it is resumed) from just
+  before the pre-typing check until the post-typing check has run; they are always
+  re-enabled, also on error or refusal, and a session that cannot be frozen refuses the
+  typing (`ErrTypeRefused`, nothing typed). The `input` event the field fired while
+  frozen never reached the page's own listeners (a framework-controlled field would
+  submit empty), so once scripts run again facto dispatches one `input` event, without
+  the data, on the focused element from its isolated world (constant expression). Proof:
+  `TestAttack_ChromeFocusSwapNeverDeliversToCrossOriginFrame` (six browsers in parallel),
+  `TestChrome_TypeSecretPageListenerSeesValue` (tags `e2e,chrome`), unit tests in
+  `freeze_test.go`.
 - **Cookies in memory.** The login runs in a `Target.createBrowserContext` context, so
   cookies are not written to the profile. `--use-mock-keychain` on macOS.
 - **Downloads and permissions.** `Browser.setDownloadBehavior` set to deny; site

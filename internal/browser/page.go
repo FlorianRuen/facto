@@ -56,8 +56,9 @@ const (
 	maxCookieExpiry = 253402300799
 )
 
-// documentExpression is the only Runtime.evaluate expression: the main
-// frame's document, whose objectId the page functions run on.
+// documentExpression is the Runtime.evaluate expression giving the main
+// frame's document, whose objectId the page functions run on (the only
+// other one is notifyExpression, after typing).
 const documentExpression = "document"
 
 // isolatedWorldName names the isolated world the page functions run in
@@ -150,6 +151,7 @@ type Page struct {
 	running     int
 	subsChanged chan struct{} // closed and replaced on each change
 	stopped     bool
+	frozen      *frozenSet // the freeze in progress (freeze.go), nil otherwise
 
 	blockedMu sync.Mutex
 	blocked   map[string]int
@@ -264,8 +266,8 @@ func (p *Page) setup(ctx context.Context) error {
 	if err := p.installNoWebRTC(ctx, p.sessionID); err != nil {
 		return fmt.Errorf("new page: %w", err)
 	}
-	p.watch("", rootParent, false, true)
-	p.watch(p.sessionID, rootParent, true, true)
+	p.watch("", rootParent, false, true, false)
+	p.watch(p.sessionID, rootParent, true, true, false)
 	if err := p.call(ctx, p.sessionID, "Fetch.enable", fetchEnableParams, nil); err != nil {
 		return fmt.Errorf("new page: enable fetch: %w", err)
 	}
@@ -559,7 +561,10 @@ type activeCheck struct {
 // https and allowlisted (ADR 0008 "Secret typing"), then types value with
 // one Input.insertText. It checks both again after typing: a change gives
 // ErrTypeRefused ("focus or origin changed while typing"); the value may
-// then have reached the page and the login must not go on. The value is
+// then have reached the page and the login must not go on. Page scripts
+// are frozen from the pre-typing check to the post-typing one (freeze.go),
+// so no page timer can move the focus in between; the page's input
+// listeners are then notified (notifyInput). The value is
 // exposed only in the insertText request, whose encoded buffer the client
 // clears once sent; it never reaches a log or an error. The caller's secret
 // is not wiped.
@@ -573,6 +578,31 @@ func (p *Page) TypeSecret(ctx context.Context, selector string, value secret.Sec
 	}
 	if !focused {
 		return fmt.Errorf("type secret: %w", ErrNotVisible)
+	}
+	if err := p.typeFrozen(ctx, selector, value); err != nil {
+		return err
+	}
+	if err := p.notifyInput(ctx); err != nil {
+		return fmt.Errorf("type secret: after typing: %w", err)
+	}
+	return nil
+}
+
+// typeFrozen runs the pre-typing check, Input.insertText and the
+// post-typing check with page scripts frozen (freeze.go), so no page code
+// can move the focus between the check and the typing; scripts are
+// re-enabled before it returns, whatever happened. A session that cannot
+// be frozen refuses the typing (ErrTypeRefused).
+func (p *Page) typeFrozen(ctx context.Context, selector string, value secret.Secret) error {
+	fs, err := p.freeze(ctx)
+	defer func() {
+		if uerr := p.unfreeze(ctx, fs); uerr != nil {
+			p.log.Debug("browser: page scripts not re-enabled", "error", uerr)
+		}
+	}()
+	if err != nil {
+		p.log.Debug("browser: secret typing refused: page scripts not frozen", "error", err)
+		return fmt.Errorf("type secret: %w: page scripts could not be frozen", ErrTypeRefused)
 	}
 	loaderID, reason, err := p.typingTarget(ctx, selector, "")
 	if err != nil {
@@ -594,6 +624,41 @@ func (p *Page) TypeSecret(ctx context.Context, selector string, value secret.Sec
 	if reason != "" {
 		p.log.Debug("browser: focus or origin changed while typing", "reason", reason)
 		return fmt.Errorf("type secret: %w: focus or origin changed while typing", ErrTypeRefused)
+	}
+	return nil
+}
+
+// notifyExpression fires, from facto's isolated world, the input event
+// the page's own listeners missed while scripts were frozen (the field
+// changed but no page code saw it), on the focused element of the main
+// frame, without the typed data. It is a constant.
+const notifyExpression = `(() => {
+  const a = document.activeElement;
+  if (!a || a.tagName === "IFRAME" || a.tagName === "FRAME") return false;
+  a.dispatchEvent(new InputEvent("input", {bubbles: true, composed: true, inputType: "insertText", data: null}));
+  return true;
+})()`
+
+// notifyInput runs notifyExpression in the isolated world of the current
+// main frame document.
+func (p *Page) notifyInput(ctx context.Context) error {
+	fr, err := p.mainFrame(ctx)
+	if err != nil {
+		return err
+	}
+	w, _, err := p.isolatedWorld(ctx, fr)
+	if err != nil {
+		return err
+	}
+	var rv remoteValue
+	if err := p.call(ctx, p.sessionID, "Runtime.evaluate", map[string]any{
+		"expression": notifyExpression, "contextId": w.contextID, "returnByValue": true,
+	}, &rv); err != nil {
+		p.dropWorld(w)
+		return err
+	}
+	if rv.ExceptionDetails != nil {
+		return fmt.Errorf("%w: exception", errPageScript)
 	}
 	return nil
 }

@@ -57,6 +57,7 @@ const rootParent = "\x00root"
 type watched struct {
 	parent string
 	subs   []*Subscription
+	frame  bool // an out-of-process frame target (frozen while typing, freeze.go)
 }
 
 // watch subscribes, fail closed, the handlers of session: Fetch.requestPaused
@@ -65,7 +66,7 @@ type watched struct {
 // Each subscription is read by one page goroutine until it closes. It
 // returns false, subscribing nothing, when the page is stopping or parent
 // is no longer watched (it was detached meanwhile).
-func (p *Page) watch(session, parent string, fetch, targets bool) bool {
+func (p *Page) watch(session, parent string, fetch, targets, frame bool) bool {
 	p.subsMu.Lock()
 	defer p.subsMu.Unlock()
 	if p.stopped {
@@ -74,7 +75,7 @@ func (p *Page) watch(session, parent string, fetch, targets bool) bool {
 	if _, ok := p.sessions[parent]; !ok && parent != rootParent {
 		return false
 	}
-	w := &watched{parent: parent}
+	w := &watched{parent: parent, frame: frame}
 	opts := SubscribeOptions{FailClosed: true}
 	if fetch {
 		w.subs = append(w.subs, p.c.Subscribe("Fetch.requestPaused", session, opts))
@@ -321,7 +322,8 @@ func (p *Page) onAttached(ev Event) {
 		return
 	}
 	nested := at.TargetInfo.Type == "page" || at.TargetInfo.Type == "iframe" || at.TargetInfo.Type == "worker"
-	if !p.watch(at.SessionID, ev.SessionID, true, nested) {
+	frame := at.TargetInfo.Type == "iframe"
+	if !p.watch(at.SessionID, ev.SessionID, true, nested, frame) {
 		p.closeTarget(at.TargetInfo.TargetID)
 		return
 	}
@@ -336,6 +338,15 @@ func (p *Page) onAttached(ev Event) {
 	}
 	ctx, cancel := p.enforceCtx()
 	defer cancel()
+	if frame {
+		// A frame attached while a secret is being typed starts frozen.
+		if err := p.freezeAttached(ctx, at.SessionID); err != nil {
+			p.release(at.SessionID)
+			p.log.Warn("browser: attached frame closed: page scripts not frozen while typing", "error", err)
+			p.closeTarget(at.TargetInfo.TargetID)
+			return
+		}
+	}
 	if _, err := p.c.Call(ctx, at.SessionID, "Runtime.runIfWaitingForDebugger", nil); err != nil {
 		p.log.Debug("browser: resume target failed", "error", err)
 	}
