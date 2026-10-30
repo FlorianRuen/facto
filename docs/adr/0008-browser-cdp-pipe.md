@@ -204,8 +204,33 @@ the pipe (the io-pipes route below bypasses this):
 - Hash pinning is trust-on-first-use: Chrome for Testing publishes download URLs but no
   checksum (unverified), so the SHA-256 of the pinned archive is computed on the first
   download by a maintainer and committed next to the pinned version (T12). Any later
-  mismatch fails the install with nothing extracted. The version number and hash are set
-  in T12 (unverified here); the download host name is unverified until T12.
+  mismatch fails the install with nothing extracted.
+- **Pin (T12, 2026-10-30).** Chrome for Testing stable `156.0.8078.80`, linux64,
+  `https://storage.googleapis.com/chrome-for-testing-public/156.0.8078.80/linux64/chrome-linux64.zip`,
+  201329937 bytes, SHA-256
+  `b711c720f774be355197f32edf37e0651418ba036d92446ee2da19ac017540a7`
+  (`internal/browser/cft/pinned.go`). Version and URL were read from the "Stable" channel of
+  `googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json`;
+  size and hash were computed from a download through `internal/httpx`, then recomputed by
+  a second, independent download through `facto browser install` (`make chrome`), which
+  verified them. A recomputation by CI or a second person is still to be done before the
+  milestone closes.
+- **Host.** The download host is `storage.googleapis.com`, shared Google Cloud Storage,
+  which `httpx.ParseAllowlist` refuses on purpose. The installer uses
+  `httpx.NewPinned(host, "/chrome-for-testing-public/")` instead: on the first request
+  and on every redirect hop, before dialing, https only, the exact host byte for byte
+  (no case change, trailing dot, subdomain or IDN form), port 443, no userinfo, and a
+  canonical path (no dot or empty segment, no percent-encoding, no backslash) under the
+  prefix. `ParseAllowlist` and connector allowlists are unchanged. Only
+  `internal/browser/cft` may call `NewPinned`: a forbidigo rule, backed by
+  `internal/httpx/pinned_callers_test.go` and proven live by `make lint-selftest`.
+- **Layout.** `facto browser install` unpacks into `<state_dir>/chrome/<version>/`
+  (`--dir` to override; `make chrome` uses `.cache/chrome`, gitignored), every directory
+  0700, executables 0700, other files 0600, no setuid bit (so the bundled `chrome_sandbox`
+  is not SUID), and writes `.facto-verified` (the SHA-256) last. A verified install is
+  reused without network I/O. Each install first removes the `.cft-work-*` leftovers of an
+  interrupted one (symlinks unlinked, never followed), and refuses an archive whose
+  `chrome` is not executable by its owner.
 - The first hash is recomputed independently, by CI or by a second person, before it is
   committed. The manifest records the exact URL, size and SHA-256. The allowlist pins the
   exact host and a path prefix, since the download host is shared storage. A size

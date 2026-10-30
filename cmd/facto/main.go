@@ -20,6 +20,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/FlorianRuen/facto/internal/browser/cft"
 	"github.com/FlorianRuen/facto/internal/clock"
 	"github.com/FlorianRuen/facto/internal/config"
 	"github.com/FlorianRuen/facto/internal/connector"
@@ -60,6 +61,10 @@ type env struct {
 	// InstalledBrowser returns the Chrome installed by `facto browser
 	// install`; nil = installedBrowser.
 	InstalledBrowser func(e env) (string, bool)
+	// InstallBrowser installs the Chrome for Testing build of opts and
+	// returns the executable path; nil means installPinnedBrowser (real
+	// download). Test seam: CLI tests never touch the network.
+	InstallBrowser func(ctx context.Context, opts cft.Options) (string, error)
 }
 
 // terminal returns e.Terminal, or the OS terminal.
@@ -178,7 +183,7 @@ func newRootCmd(ctx context.Context, e env, stdin io.Reader, stdout, stderr io.W
 	root.SetIn(stdin)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
-	root.AddCommand(newVersionCmd(), newCollectCmd(ctx, e), newLoginCmd(ctx, e))
+	root.AddCommand(newVersionCmd(), newCollectCmd(ctx, e), newLoginCmd(ctx, e), newBrowserCmd(ctx, e))
 	return root
 }
 

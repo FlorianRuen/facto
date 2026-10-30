@@ -10,7 +10,7 @@ export ART_DIR := $(CURDIR)/.cache/test-artifacts
 # lint-selftest creates in-tree fixtures that race/lint must not see: never run targets in parallel.
 .NOTPARALLEL:
 
-.PHONY: verify fmt-check lint lint-selftest test race cover e2e e2e-unit leakcheck audit score-check tools lint-actions release-check release-e2e-check
+.PHONY: verify fmt-check lint lint-selftest test race cover e2e e2e-unit chrome leakcheck audit score-check tools lint-actions release-check release-e2e-check
 
 # goreleaser runs from its pinned image (ADR 0001) so its dependencies stay out
 # of tools/go.mod and the osv-scanner scope.
@@ -87,7 +87,17 @@ e2e-unit:
 cover: race
 	./scripts/check-coverage.sh .cache/coverage.out "$(COVER_GATES)" 70
 
-e2e:
+# Pinned Chrome for Testing for development and make e2e (ADR 0008, J1 T12):
+# facto browser install, the same verified download as for users, into
+# .cache/chrome (gitignored, 0700). Idempotent: a verified install is kept
+# without any network I/O. Prints the executable path.
+CHROME_DIR := $(CURDIR)/.cache/chrome
+
+chrome:
+	mkdir -p .cache
+	$(GO) run ./cmd/facto browser install --dir "$(CHROME_DIR)"
+
+e2e: chrome
 	docker compose -f test/compose.yaml up -d --wait vaultwarden
 	$(GO) test -tags e2e -count=1 -v ./test/e2e/... ; status=$$?; \
 	docker compose -f test/compose.yaml down -v; exit $$status
