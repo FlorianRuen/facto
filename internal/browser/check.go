@@ -69,7 +69,9 @@ var knownSwitches = map[string]string{
 // --host-resolver-rules with anything but "MAP <host> ~NOTFOUND" and
 // "EXCLUDE <host>" rules (so no loopback or IP mapping),
 // --remote-debugging-port outside windows and any value but "0" on
-// windows, positional arguments and "--", and any switch given twice.
+// windows, positional arguments and "--", and any switch given twice. It
+// also refuses an argv missing one of the mandatory isolation switches
+// (mandatorySwitches), so the launch-time check stands alone.
 func CheckFlags(goos string, args []string) error {
 	goos, err := resolveGOOS(goos)
 	if err != nil {
@@ -92,7 +94,30 @@ func CheckFlags(goos string, args []string) error {
 			return err
 		}
 	}
+	for _, name := range mandatorySwitches(goos) {
+		if !seen[name] {
+			return fmt.Errorf("%w: mandatory switch --%s missing", ErrForbiddenFlag, name)
+		}
+	}
 	return nil
+}
+
+// mandatorySwitches are the switches every release argv carries on goos:
+// the disposable profile, the resolver allowlist, the WebRTC and DNS
+// prefetch leaks closed, and the CDP transport (pipe, or the port-0
+// fallback on windows, ADR 0008 "Windows (A4)").
+func mandatorySwitches(goos string) []string {
+	transport := "remote-debugging-pipe"
+	if goos == goosWindows {
+		transport = "remote-debugging-port"
+	}
+	return []string{
+		"user-data-dir",
+		"host-resolver-rules",
+		"force-webrtc-ip-handling-policy",
+		"dns-prefetch-disable",
+		transport,
+	}
 }
 
 // parseSwitch splits one argument into its lowercased name and value. ok is

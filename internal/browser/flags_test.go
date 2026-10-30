@@ -292,7 +292,11 @@ func TestFlags_WindowsPortIsZeroOnly(t *testing.T) {
 		}
 	}
 
-	base := []string{"--user-data-dir=" + windowsProfile}
+	// Release flags minus the port, so CheckFlags' mandatory switches (T10)
+	// are present and only the port under test decides.
+	base := slices.DeleteFunc(mustFlags(t, opts("windows")), func(a string) bool {
+		return strings.HasPrefix(a, "--remote-debugging-port")
+	})
 	tests := []struct {
 		name    string
 		args    []string

@@ -16,12 +16,14 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/FlorianRuen/facto/internal/browser"
+	"github.com/FlorianRuen/facto/internal/fsx"
 )
 
 const (
@@ -42,6 +44,21 @@ const (
 	modeCDP    = "cdp"    // serve CDP on fds 3/4
 	modeDeaf   = "deaf"   // no I/O, wait for fakeLifetime (a grandchild, or a fake that ignores pipe EOF)
 	modeParent = "parent" // start a deaf fake through StartPipe, print its pid, wait (parent-death test)
+)
+
+// Pool tests (T10): the fake also answers NewPage's setup, and writes into
+// its --user-data-dir like Chrome does.
+const (
+	// fakePageEnv selects how the fake answers NewPage's setup.
+	fakePageEnv = "FACTO_FAKE_PAGE"
+	// pageFailContext: Target.createBrowserContext answers a CDP error.
+	pageFailContext = "fail-context"
+	// fakeProfileFile is written (0600) by the fake into
+	// <user-data-dir>/Default at startup, before it answers anything.
+	fakeProfileFile = "Default/Cookies"
+	// fakeProfileLock is the dangling symlink Chrome keeps in its profile
+	// (SingletonLock -> "<host>-<pid>").
+	fakeProfileLock = "SingletonLock"
 )
 
 func TestMain(m *testing.M) {
@@ -131,6 +148,10 @@ func serveCDP() int {
 		return 11
 	}
 	go func() { <-time.After(fakeLifetime); os.Exit(12) }()
+	if err := populateProfile(os.Args[1:]); err != nil {
+		return 14
+	}
+	failContext := os.Getenv(fakePageEnv) == pageFailContext
 
 	r := bufio.NewReader(in)
 	var held, flush []byte // Fake.hold replies; the pending Fake.flush reply
@@ -224,6 +245,22 @@ func serveCDP() int {
 			return 3
 		case "Fake.hang":
 			// Never answer.
+		// NewPage's setup (pool tests).
+		case "Target.createBrowserContext":
+			if failContext {
+				w = frame(map[string]any{"id": req.ID, "error": map[string]any{"code": -32000, "message": "scripted failure"}})
+			} else {
+				w = reply(map[string]any{"browserContextId": "ctx-pipe-1"})
+			}
+		case "Target.createTarget":
+			w = reply(map[string]any{"targetId": "tgt-pipe-1"})
+		case "Target.attachToTarget":
+			w = reply(map[string]any{"sessionId": "sess-pipe-1"})
+		// Fetch.enable and Target.setAutoAttach: NewPage's in-browser
+		// allowlist steps (T9).
+		case "Browser.setDownloadBehavior", "Page.enable", "Target.disposeBrowserContext",
+			"Fetch.enable", "Target.setAutoAttach":
+			w = reply(map[string]any{})
 		default:
 			w = frame(map[string]any{"id": req.ID, "error": map[string]any{"code": -32601, "message": "method not found"}})
 		}
@@ -239,6 +276,36 @@ func serveCDP() int {
 			}
 		}
 	}
+}
+
+// populateProfile writes into the --user-data-dir found in args (if any) what
+// Chrome leaves in a profile: a nested file and a dangling SingletonLock
+// symlink. Without the switch it does nothing (pipe tests).
+func populateProfile(args []string) error {
+	var dir string
+	for _, a := range args {
+		if v, ok := strings.CutPrefix(a, "--user-data-dir="); ok {
+			dir = v
+		}
+	}
+	if dir == "" {
+		return nil
+	}
+	r, err := fsx.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open profile: %w", err)
+	}
+	defer func() { _ = r.Close() }()
+	if err := r.MkdirPrivate("Default"); err != nil {
+		return fmt.Errorf("profile subdir: %w", err)
+	}
+	if err := r.WriteAtomic(context.Background(), fakeProfileFile, []byte("fake cookie store")); err != nil {
+		return fmt.Errorf("profile file: %w", err)
+	}
+	if err := os.Symlink("fakehost-"+strconv.Itoa(os.Getpid()), filepath.Join(dir, fakeProfileLock)); err != nil {
+		return fmt.Errorf("profile lock: %w", err)
+	}
+	return nil
 }
 
 // spawnDeaf starts a deaf grandchild in the fake's process group. With

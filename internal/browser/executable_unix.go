@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 )
 
 // checkModes applies the unix permission rules of CheckExecutable to the
@@ -51,4 +52,36 @@ func dirMode(dir string) (fs.FileMode, error) {
 		return 0, fmt.Errorf("%w: %w", ErrUnsafeExecutable, err)
 	}
 	return fi.Mode(), nil
+}
+
+// checkOwners requires the resolved binary and its parent directory to be
+// owned by euid or root. Both paths come from a fully resolved path, so
+// owner is never asked about a symlink.
+func checkOwners(resolved string, euid int, owner func(string) (int, error)) error {
+	if owner == nil {
+		return fmt.Errorf("%w: no owner lookup", ErrUnsafeExecutable)
+	}
+	for _, p := range []string{resolved, filepath.Dir(resolved)} {
+		uid, err := owner(p)
+		if err != nil {
+			return fmt.Errorf("%w: owner of %s: %w", ErrUnsafeExecutable, p, err)
+		}
+		if uid != euid && uid != 0 {
+			return fmt.Errorf("%w: %s is owned by uid %d, neither the current user nor root", ErrUnsafeExecutable, p, uid)
+		}
+	}
+	return nil
+}
+
+// statOwner returns the owner uid of path (already resolved).
+func statOwner(path string) (int, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0, fmt.Errorf("stat: %w", err)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, fmt.Errorf("stat %s: no owner information", path)
+	}
+	return int(st.Uid), nil
 }

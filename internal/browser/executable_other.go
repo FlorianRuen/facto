@@ -10,3 +10,9 @@ import "io/fs"
 func checkModes(string, fs.FileInfo) error {
 	return nil
 }
+
+// checkOwners does not apply outside unix (SEC-J0-18).
+func checkOwners(string, int, func(string) (int, error)) error { return nil }
+
+// statOwner is never consulted outside unix.
+func statOwner(string) (int, error) { return -1, nil }
