@@ -266,8 +266,8 @@ func (p *Page) setup(ctx context.Context) error {
 	if err := p.installNoWebRTC(ctx, p.sessionID); err != nil {
 		return fmt.Errorf("new page: %w", err)
 	}
-	p.watch("", rootParent, false, true, false)
-	p.watch(p.sessionID, rootParent, true, true, false)
+	p.watch("", rootParent, false, true, "")
+	p.watch(p.sessionID, rootParent, true, true, "")
 	if err := p.call(ctx, p.sessionID, "Fetch.enable", fetchEnableParams, nil); err != nil {
 		return fmt.Errorf("new page: enable fetch: %w", err)
 	}

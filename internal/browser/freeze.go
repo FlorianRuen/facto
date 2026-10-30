@@ -36,7 +36,7 @@ func (p *Page) freeze(ctx context.Context) (*frozenSet, error) {
 	p.frozen = fs
 	targets := []string{p.sessionID}
 	for id, w := range p.sessions {
-		if w.frame {
+		if w.typ == "iframe" {
 			targets = append(targets, id)
 		}
 	}

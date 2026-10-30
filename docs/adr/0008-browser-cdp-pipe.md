@@ -316,6 +316,16 @@ the pipe (the io-pipes route below bypasses this):
     `TestFetch_WorkerWithoutFetchRelyOnParent`. Residual risk: a Chrome release that
     stops applying page interception to dedicated workers; the e2e test catches it on
     every pin bump (`make e2e`).
+  - shared workers (J1 T27, red-team finding LOW): a `shared_worker` target gets
+    `Target.setAutoAttach` (`waitForDebuggerOnStart`, `flatten`) after `Fetch.enable` and
+    before it is resumed, like pages, frames and dedicated workers, so a nested dedicated
+    worker starts paused; Chrome refusing it closes the target unresumed. A shared worker
+    session is not a parent whose `Fetch` is known to cover its dedicated workers, so a
+    nested worker answering `-32601` to `Fetch.enable` there is closed. On Chrome for
+    Testing 156 `setAutoAttach` on shared workers succeeds and they run (real-Chrome state
+    `shared-settled`; `new Worker` inside them is still unsupported). Proof:
+    `TestAttack_SharedWorkerGetsAutoAttachBeforeResume`, `TestFetch_SharedWorkerNestedFailClosed`,
+    `TestAttack_ChromeSharedWorkerNestedWorkerFetchBlocked` (tags `e2e,chrome`).
   - second layer, release builds too, derived from the same allowlist:
     `--host-resolver-rules="MAP * ~NOTFOUND, EXCLUDE <allowlist>"`,
     `--webrtc-ip-handling-policy=disable_non_proxied_udp` (see "WebRTC" below; the legacy

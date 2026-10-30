@@ -57,7 +57,7 @@ const rootParent = "\x00root"
 type watched struct {
 	parent string
 	subs   []*Subscription
-	frame  bool // an out-of-process frame target (frozen while typing, freeze.go)
+	typ    string // targetInfo.type ("" for the root sessions)
 }
 
 // watch subscribes, fail closed, the handlers of session: Fetch.requestPaused
@@ -66,7 +66,7 @@ type watched struct {
 // Each subscription is read by one page goroutine until it closes. It
 // returns false, subscribing nothing, when the page is stopping or parent
 // is no longer watched (it was detached meanwhile).
-func (p *Page) watch(session, parent string, fetch, targets, frame bool) bool {
+func (p *Page) watch(session, parent string, fetch, targets bool, typ string) bool {
 	p.subsMu.Lock()
 	defer p.subsMu.Unlock()
 	if p.stopped {
@@ -75,7 +75,7 @@ func (p *Page) watch(session, parent string, fetch, targets, frame bool) bool {
 	if _, ok := p.sessions[parent]; !ok && parent != rootParent {
 		return false
 	}
-	w := &watched{parent: parent, frame: frame}
+	w := &watched{parent: parent, typ: typ}
 	opts := SubscribeOptions{FailClosed: true}
 	if fetch {
 		w.subs = append(w.subs, p.c.Subscribe("Fetch.requestPaused", session, opts))
@@ -299,8 +299,8 @@ func (p *Page) onTargetEvent(ev Event) {
 }
 
 // onAttached enforces the allowlist on an auto-attached target before it
-// runs: Fetch.enable (plus setAutoAttach for pages, frames and dedicated
-// workers, which can start nested targets), then
+// runs: Fetch.enable (plus setAutoAttach for pages, frames, dedicated and
+// shared workers, which can start nested targets), then
 // Runtime.runIfWaitingForDebugger. On failure the target is closed and
 // never resumed. A target that is already running (not waiting for the
 // debugger) may have sent requests unchecked: it is closed, unless it is
@@ -321,15 +321,19 @@ func (p *Page) onAttached(ev Event) {
 		p.closeTarget(at.TargetInfo.TargetID)
 		return
 	}
-	nested := at.TargetInfo.Type == "page" || at.TargetInfo.Type == "iframe" || at.TargetInfo.Type == "worker"
-	frame := at.TargetInfo.Type == "iframe"
-	if !p.watch(at.SessionID, ev.SessionID, true, nested, frame) {
+	typ := at.TargetInfo.Type
+	// Every target that can start nested targets gets setAutoAttach before
+	// it runs, shared workers included (J1 T27): their nested workers start
+	// paused too.
+	nested := typ == "page" || typ == "iframe" || typ == "worker" || typ == "shared_worker"
+	frame := typ == "iframe"
+	if !p.watch(at.SessionID, ev.SessionID, true, nested, typ) {
 		p.closeTarget(at.TargetInfo.TargetID)
 		return
 	}
 	// Only a dedicated worker started under a watched page, frame or
 	// worker session has a parent Fetch intercepting its requests.
-	parentFetch := at.TargetInfo.Type == "worker" && p.interceptsChildren(ev.SessionID)
+	parentFetch := typ == "worker" && p.interceptsChildren(ev.SessionID)
 	if err := p.enableChild(at.SessionID, parentFetch, nested); err != nil {
 		p.release(at.SessionID)
 		p.log.Warn("browser: attached target closed: allowlist not enforceable", "error", err)
@@ -365,17 +369,19 @@ func (p *Page) closeTarget(targetID string) {
 }
 
 // interceptsChildren reports whether session is a watched, non-browser
-// session whose attach events the page handles: the page session or a
-// page, frame or worker session attached under it (only those subscribe
-// to Target events, and each has Fetch enabled or inherits its parent's).
+// session whose Fetch is known to cover its dedicated workers: the page
+// session or a page, frame or worker session attached under it. A shared
+// worker session is not one of them: that Chrome applies its Fetch to a
+// nested dedicated worker is unproven (Chrome for Testing 156 refuses
+// `new Worker` there), so such a worker without its own Fetch is closed.
 func (p *Page) interceptsChildren(session string) bool {
 	if session == "" {
 		return false
 	}
 	p.subsMu.Lock()
 	defer p.subsMu.Unlock()
-	_, ok := p.sessions[session]
-	return ok
+	w, ok := p.sessions[session]
+	return ok && w.typ != "shared_worker"
 }
 
 // enableChild turns the interception on for an attached target.
