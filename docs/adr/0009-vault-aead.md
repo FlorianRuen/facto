@@ -99,9 +99,11 @@ offset  size  field
   select it. `make release-e2e-check` (T17, run by `make verify`; separate from the goreleaser
   `make release-check`) fails if either check hits:
   `go list -deps` with the release build flags lists `internal/vault/e2ekey`, or
-  `go tool nm` on the release binary shows the package's sentinel symbol (referenced at
-  registration so the linker keeps it). Self-test: the same check run with `-tags e2e`
-  must hit both, otherwise release-check fails (A3).
+  `go tool nm` shows the package's sentinel symbol (referenced at registration so the
+  linker keeps it). The nm check runs on a binary built with the release flags minus
+  the single `-s` ldflag: a release binary is linked with `-s` (no symbol table), and
+  dropping `-s` changes nothing about what is linked. Self-test: the same check run with
+  `-tags e2e` must hit both, otherwise release-check fails (A3).
   An e2e binary never consults the OS keyring (J1 T23): without a test seam its key
   backend is the file source over `<state_dir>/e2e-keys` (0700, created on first use),
   derived from the state dir rather than a variable, so every e2e run (always on a

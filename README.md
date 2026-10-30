@@ -10,21 +10,25 @@ Nothing is hosted. Everything runs on your machine, with your own accounts.
 
 ## Status
 
-**Milestone J0 (foundations).** facto has two commands: `facto collect` and
-`facto version`. In J0, `collect` only files the PDFs you drop by hand in the
-`inbox/` folder. No supplier connector ships yet.
+**Milestone J1 (browser layer and fake provider).** facto has four commands:
+`facto collect`, `facto login`, `facto browser install` and `facto version`.
 
-Login, browser automation, session storage, real connectors, Google Drive and the
-mobile receipt capture come in later milestones (J1 to J4).
+J1 adds the parts every real connector needs: a hardened browser for login,
+encrypted session storage, and the secret resolver wired into `collect` and
+`login`. They are tested end to end against `fakeprovider`, a synthetic
+supplier that exists in test builds only.
+
+A release build still ships **no supplier connector**. In practice `collect`
+files the PDFs you drop by hand in the `inbox/` folder. Real connectors, Google
+Drive and the mobile receipt capture come in later milestones (J2 to J4).
 
 ### Connectors
 
-No supplier connector is implemented yet. Connector sheets live in
-[`docs/connectors/`](docs/connectors/).
+Connector sheets live in [`docs/connectors/`](docs/connectors/).
 
 | Connector | Status |
 | --- | --- |
-| [`fakeprovider`](docs/connectors/fakeprovider.md) (test only, e2e builds) | beta: HTTP side (list, fetch, persist, probe) and login flows (unit-tested); e2e fake site in progress |
+| [`fakeprovider`](docs/connectors/fakeprovider.md) (test only, e2e builds) | beta: every login mode (password, TOTP, email OTP, SSO redirect, captcha) and failure mode covered by `make e2e` against a fake site. Not in release builds |
 
 ## Install
 
@@ -43,7 +47,14 @@ must be on your `PATH`. `facto version` prints
 `facto <version> (<go version> <os>/<arch>)`. A build from source reports the
 version `dev`.
 
-## Quick start (J0)
+No connector needs a browser yet. When one does, install the pinned browser
+once (Linux x86-64), see [`facto browser install`](#facto-browser-install):
+
+```sh
+facto browser install
+```
+
+## Quick start
 
 1. Create the config file, readable by you only. facto refuses a
    `config.yaml` with any group or world permission bit. The commands below
@@ -97,23 +108,26 @@ A relative `XDG_CONFIG_HOME` or `APPDATA` is ignored.
 The file must be a regular file (not a symlink), at most 64 KiB, and owner-only
 on Unix (`0600`). Decoding is strict: an unknown key, a duplicate key or a wrong
 type is an error. The format follows [`docs/spec.md`](docs/spec.md)
-("Configuration"). What J0 does with each key:
+("Configuration"). What facto does with each key today:
 
-| Key | Default | Used in J0 |
+| Key | Default | Used today |
 | --- | --- | --- |
 | `output.local` | `~/Documents/Invoices` | Yes. Absolute path or `~/…`. Created `0700` if missing; its parent must exist. May be a symlink to a folder. |
 | `output.gdrive.enabled` | `false` | No. `true` only prints a warning; documents are filed locally. |
 | `output.gdrive.root` | `Invoices` | No |
 | `naming.file`, `naming.dir` | see [Naming scheme](#naming-scheme) | Yes |
 | `naming.language` | `en` | Yes (`en` or `fr`) |
-| `state_dir` | `~/.facto` | Yes. Holds `index.db` and `reports/`. Must stay outside `output.local` and outside synced folders. |
+| `state_dir` | `~/.facto` | Yes. Holds `index.db`, `reports/`, `sessions/`, `install-id` and, after `facto browser install`, `chrome/`. Must stay outside `output.local` and outside synced folders. |
+| `sessions` | `persistent` | Yes: `persistent` or `ephemeral`. See [Sessions](#sessions). |
+| `browser.path` | none | Yes, when a connector needs a browser. See [Browser](#facto-browser-install). |
 | `manual` | none | Yes: `id` and `category` of providers you file by hand. `reminder` is checked (`MM-DD`) but no reminder is sent yet. |
-| `connectors` | none | Checked only. Any `enabled: true` connector is refused (exit `2`): none ships in J0. |
-| `secrets.default`, `sessions`, `notify` | `bitwarden`, `persistent`, `desktop` | Checked only. Nothing uses them yet. |
+| `connectors` | none | Checked. A release build ships no connector, so any `enabled: true` connector is refused (exit `2`, "connector not available in this version"). |
+| `secrets.default`, `notify` | `bitwarden`, `desktop` | Checked only. Nothing uses them yet. |
 
 Secret fields (`login`, `password`, `otp` under a connector) must be empty or a
 reference (`bw://<uuid>/password`, `keyring://<service>/<key>`). A plaintext
-value is refused, and the error never prints it.
+value is refused, and the error never prints it. The `otp` reference must give
+a one-time code, never a TOTP seed.
 
 ## `facto collect`
 
@@ -130,13 +144,17 @@ facto collect [--year N] [--config PATH] [--non-interactive]
 Order of a run:
 
 1. Load and check `config.yaml`. Any error stops here: nothing is created.
-2. Create `output.local` and `output.local/inbox` if missing. `inbox` must be a
+2. Build the secret resolver (Bitwarden and keyring). It is closed, and the
+   password manager locked, at the end of every run.
+3. Create `output.local` and `output.local/inbox` if missing. `inbox` must be a
    real folder: a symlinked `inbox` is refused.
-3. Check that `state_dir` is not inside `output.local`, with symlinks followed.
-4. Open the index (`<state_dir>/index.db`) and the output folder.
-5. Run the enabled connectors (none in J0).
-6. File the `inbox/` content.
-7. Write the report to `<state_dir>/reports/` and print it.
+4. Check that `state_dir` is not inside `output.local`, with symlinks followed.
+5. Open the index (`<state_dir>/index.db`) and the output folder.
+6. Prepare the browser pool, which removes stale browser profiles left by a
+   crashed run. Open the session store (see [Sessions](#sessions)).
+7. Run the enabled connectors (none in a release build).
+8. File the `inbox/` content.
+9. Write the report to `<state_dir>/reports/` and print it.
 
 Ctrl-C or `SIGTERM` (for example `systemctl stop`) cancels the run. The report
 of a canceled run is still written.
@@ -153,6 +171,11 @@ of a canceled run is still written.
 facto collect --non-interactive; echo "exit $?"
 ```
 
+A connector that needs you is reported with a fixed note:
+`needs_login` says "login required: run `facto login <id>`", and
+`auth_failed` says "credentials rejected: run `facto config <id>`".
+`facto config` does not exist yet: fix the references in `config.yaml` instead.
+
 ### Interactive questions
 
 On a terminal, without `--non-interactive`, `collect` asks about each
@@ -168,6 +191,90 @@ Press Enter to keep the value in brackets. Type `-` to skip the file. An empty
 date with no default, or an invalid date, also skips it. A skipped file stays in
 `inbox/`. The kind is never asked: it stays `invoice` unless the file name says
 otherwise.
+
+## `facto login`
+
+```sh
+facto login <connector-id> [--config PATH]
+```
+
+Logs in to one configured connector and saves its session for the next
+`collect` runs. It always does a fresh login, and it never lists or downloads
+documents.
+
+- It needs an interactive terminal. With `--non-interactive`, or when stdin is
+  not a terminal, it exits `2` before doing anything.
+- The connector must be valid, shipped by this build, and present under
+  `connectors:` in `config.yaml`. Otherwise it exits `2`. A release build ships
+  no connector yet, so today it always stops here.
+- When the site needs you (captcha, unusual check), a visible browser window
+  opens and you finish the login by hand.
+- One-time codes (email or SMS) are asked on the terminal with echo off.
+- On success it prints `<id>: logged in`. With `sessions: ephemeral` (or no
+  usable keyring) it adds `session not saved: sessions are ephemeral for this
+  run`.
+- It exits `1` when the supplier refuses the login or the login fails.
+
+## `facto browser install`
+
+```sh
+facto browser install [--dir DIR] [--config PATH]
+```
+
+facto drives Chrome for Testing for logins, never your own browser profile. It
+never downloads a browser by itself: this command is the only way.
+
+- It downloads the Chrome for Testing build pinned in this facto version
+  (linux64 only today), checks its exact size and SHA-256, and unpacks it into
+  `<state_dir>/chrome/` (or `--dir`). Folders and executables are `0700`, other
+  files `0600`.
+- `state_dir` is read from `config.yaml`. Without a config file it uses
+  `~/.facto`, so you can install before configuring facto.
+- A second run with a verified install does nothing and uses no network.
+- It never prompts. It prints `Chrome for Testing <version> installed: <path>`.
+- On another platform it fails with "no pinned Chrome for Testing build for this
+  platform". Set `browser.path` instead.
+
+facto warns at run time when the pinned build is getting old. Update facto to
+get a newer pin.
+
+### `browser.path`
+
+```yaml
+browser:
+  path: ~/chrome/chrome   # synthetic example
+```
+
+`browser.path` is the only browser setting. It must be absolute or `~/…`, and
+name an existing regular file when a browser is needed. facto does not verify a
+browser you supply: it only checks the file and its permissions (owned by you or
+root, not group- or world-writable). No setting changes the browser's launch
+flags. When `browser.path` is not set, facto uses the copy that
+`facto browser install` verified.
+
+The browser only runs during login. Each launch gets a fresh, private (`0700`)
+profile under `$XDG_RUNTIME_DIR/facto`, else `<state_dir>/tmp`. It is deleted
+when the browser exits. See [`docs/security.md`](docs/security.md) for the full
+list of browser protections.
+
+## Sessions
+
+After a login, a connector's session (its cookies) can be saved so the next
+runs skip the login while the supplier keeps it valid.
+
+| `sessions:` | What happens |
+| --- | --- |
+| `persistent` (default) | The session is saved encrypted in `<state_dir>/sessions/<id>.sess` (`0600`). Its key is a random key per connector in your OS keyring (service `facto-session`), replaced at every login. |
+| `ephemeral` | Nothing is saved: every run logs in again. At startup facto deletes every saved `.sess` file without reading it, and deletes its key. Recommended for yearly use. |
+
+- Without a usable OS keyring (for example a headless Linux without a Secret
+  Service), sessions are ephemeral for the run, with one warning. Nothing is
+  written in clear.
+- A saved session the supplier rejects is deleted. The connector is then
+  `needs_login`: run `facto login <id>`.
+- A damaged or unreadable session file just means a new login.
+
+The file format is in [ADR 0009](docs/adr/0009-vault-aead.md).
 
 ## Manual import: the `inbox/` folder
 
@@ -320,26 +427,35 @@ terms of service forbid automated access.**
   them before you enable a connector.
 - Supplier names are used descriptively. The project ships no logo or trademark.
 
-J0 ships no connector: `facto collect` does not contact any supplier yet. It
-only files the documents you downloaded yourself.
+A release build ships no connector yet: `facto collect` does not contact any
+supplier. It only files the documents you downloaded yourself.
+`facto browser install` contacts the Chrome for Testing download host only.
 
 This is not legal advice.
 
-## Current limitations (J0)
+## Current limitations (J1)
 
-- **No connector.** `collect` files the `inbox/` only. An enabled connector in
-  `config.yaml` is a configuration error (exit `2`).
-- **No secret is resolved.** `bw://` and `keyring://` references are checked
-  for syntax, but `collect` never calls Bitwarden or the keyring yet.
+- **No supplier connector.** Release builds ship none. `collect` files the
+  `inbox/` only, an enabled connector in `config.yaml` is a configuration error
+  (exit `2`), and `facto login` has nothing to log in to.
+- **Pinned browser on Linux x86-64 only.** On macOS, Windows or Linux arm64,
+  set `browser.path` to a Chrome you installed. facto does not verify it.
+- **Windows browser login is weaker.** Windows uses a loopback debug port
+  instead of a pipe, an accepted risk tracked in
+  [issue #3](https://github.com/FlorianRuen/facto/issues/3). See
+  [`docs/security.md`](docs/security.md#windows-debug-port-accepted-medium).
+- **Sessions need an OS keyring.** Without one, sessions are ephemeral for the
+  run. A `systemd-creds` key source is planned for J2.
 - **No Google Drive.** `output.gdrive.enabled: true` only prints a warning. To
   get a remote copy, point `output.local` at a Google Drive for desktop folder,
   if that folder supports hard links (next item).
 - **The output folder must support hard links.** facto never replaces a file
   and publishes with a hard link. FAT, exFAT and some network or FUSE mounts
   are refused when `collect` opens the output folder.
-- **Only `collect` and `version` exist.** `init`, `add`, `login`, `status`,
-  `doctor`, `export`, `schedule`, `record`, `--since` and `--only` are planned
-  (spec, "Commands"). Write `config.yaml` by hand.
+- **Only `collect`, `login`, `browser install` and `version` exist.** `init`,
+  `add`, `config`, `status`, `doctor`, `export`, `schedule`, `record`,
+  `--since` and `--only` are planned (spec, "Commands"). Write `config.yaml` by
+  hand.
 - **No per-provider kind.** A file identified only by its subfolder is filed as
   `invoice`. Rename it to a compliant name to choose another kind.
 - **No notification and no reminder.** `notify` and `manual[].reminder` are
@@ -366,15 +482,19 @@ The Makefile is the only entry point:
 
 | Command | What it does |
 | --- | --- |
-| `make verify` | fmt check, lint, unit tests with `-race`, coverage gates, leakcheck. Must exit 0 before any commit. |
+| `make verify` | fmt check, lint, lint self-test, unit tests with `-race`, coverage gates, e2e-build unit tests, release e2e check, leakcheck. Must exit 0 before any commit. |
 | `make test` | Unit tests only, fast |
-| `make e2e` | End-to-end tests against `connectors/fakeprovider` and a Vaultwarden container |
+| `make chrome` | Installs the pinned Chrome for Testing into `.cache/chrome` (same verified download as `facto browser install`) |
+| `make e2e` | Real-Chrome browser tests, then end-to-end scenarios against `connectors/fakeprovider` and a Vaultwarden container |
+| `make e2e-unit` | Unit tests built with `-tags e2e`, in every package that has e2e-only files (run by `verify`) |
+| `make release-e2e-check` | Proves the release build has no e2e-only code (run by `verify`) |
+| `make lint-selftest` | Proves the depguard and forbidigo guard rules are live (run by `verify`) |
+| `make e2e-browser-windows` | Real-Chrome Windows checks of the CDP port; needs `FACTO_E2E_CHROME` |
 | `make leakcheck` | Canary secret scan over every file, log and report produced by the tests |
 | `make audit` | govulncheck, gosec, gitleaks, osv-scanner; writes `security/scanners.json` |
 | `make score-check` | Fails if `security/score.json` is missing, stale or under the gate |
 
-`make e2e` needs Docker: it starts a pinned Vaultwarden container, then runs
-the scenarios in `test/e2e/`. `connectors/fakeprovider` has its HTTP side
-(list, fetch, persist, probe) and its login flows; the e2e fake site is still
-to come, so the scenarios drive the `inbox` and the configuration checks. See
+`make e2e` needs Docker and, on its first run, network access to download the
+pinned Chrome for Testing (Linux x86-64). It drives the real browser against a
+fake supplier site on 127.0.0.1. See
 [`CONTRIBUTING.md`](CONTRIBUTING.md#end-to-end-tests).

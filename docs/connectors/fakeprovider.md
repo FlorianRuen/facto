@@ -77,8 +77,8 @@ contain it; `cmd/facto` never imports the package).
   `cmd/facto` never depends on the package (T17).
 - Allowed domains: `www.fakeprovider.test`, `sso.fakeprovider.test`
 - Inspiration sources: none (synthetic).
-- Status: beta (HTTP side in T20, login flows in T21; e2e fake site in T22)
-- Last verified on: offline only
+- Status: beta (HTTP side T20, login flows T21, e2e fake site T22; every login and failure mode covered by make e2e scenarios, T23-T24)
+- Last verified on: 2026-10-30, offline only (unit tests and make e2e against the fake site; no real site exists)
 - Maintainer: Florian Ruen
 
 ## Login flow

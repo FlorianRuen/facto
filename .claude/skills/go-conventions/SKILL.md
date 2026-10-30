@@ -9,6 +9,7 @@ description: facto's Go coding conventions (package layout, errors, context, log
 - `internal/` for everything not meant for import; `connectors/<id>` per supplier.
 - Interfaces are declared by the consumer, kept small (1 to 3 methods).
 - Constructor injection: `func New(deps Deps) *T`. No package-level mutable state, no `init()` side effects except connector registration.
+- Exception, e2e-only hooks (J1 pattern): a file under `//go:build e2e` may use `init()` to set a package-level hook that is nil in every other build (in `cmd/facto`: `registerTestConnectors` and `e2eStdinPrompts` in `testhooks_e2e.go`, `testRunHooks` in `network_e2e.go`, `testSecretProviders` in `secrets_e2e.go`, `testKeyBackend` in `keys_e2e.go`, `testKeyringBackend` in `keyring_e2e.go`). The release code checks the hook for nil (or false) and does nothing without it. `make release-e2e-check` proves those files are not in the release build. Never use this outside `//go:build e2e` files. Connector packages themselves still have no `init()`: `fakeprovider.Register` is only reached through the `cmd/facto` hook.
 - New dependency = ADR in `docs/adr/NNNN-<slug>.md` (need, alternatives, license, last release, maintainers).
 
 ## Functions and errors

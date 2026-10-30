@@ -78,7 +78,7 @@ Recommendation: a CLI with an interactive terminal wizard for v1, then a local w
 **Principles.**
 
 - **Zero hosting**: everything runs on the user's machine. The only remote service is Google Drive, through the user's own account.
-- **One binary**: `facto` (working name), downloadable for Linux, macOS and Windows, with no dependency besides a Chromium browser (downloaded automatically if missing).
+- **One binary**: `facto` (working name), downloadable for Linux, macOS and Windows, with no dependency besides a Chromium browser (Chrome for Testing, installed explicitly with `facto browser install`: facto never downloads a browser on its own, ADR 0008).
 - **Idempotent**: re-running a collection never creates a duplicate. A yearly run and a monthly schedule produce the same end result.
 - **Human in the loop**: when a site asks for a 2FA code or shows a captcha, a browser window opens and the user completes the login. The session is reused afterwards.
 - **Graceful degradation**: a broken connector never stops the others, and the final report says what to do ("EDF: download manually and drop it in `inbox/`").
@@ -118,7 +118,7 @@ The orchestrator only sees normalized documents: whether a PDF comes from a conn
 | --- | --- | --- | --- |
 | CLI | `spf13/cobra` | `urfave/cli` | De facto standard |
 | Terminal wizard | `charmbracelet/huh` + `bubbletea` | `survey` (archived) | Forms, selection, spinner |
-| Browser | [`go-rod/rod`](https://github.com/go-rod/go-rod.github.io/blob/main/why-rod.md) (MIT) | [`chromedp`](https://www.libhunt.com/compare-chromedp-vs-playwright-go) (MIT) | rod: simple API, downloadable Chromium. Latest rod release [v0.116.2 in July 2024](https://webscraping.fyi/lib/compare/go-chromedp-vs-go-rod/), chromedp more active: hide behind an interface. CDP pipe support is a selection criterion (see Security) |
+| Browser | In-house CDP client over `--remote-debugging-pipe`, no dependency ([ADR 0008](adr/0008-browser-cdp-pipe.md)) | [`chromedp`](https://www.libhunt.com/compare-chromedp-vs-playwright-go) (MIT), recorded fallback | rod rejected: no pipe support, no release since July 2024, built-in browser downloader. chromedp supports the pipe but its API churns; facto needs about 17 CDP methods. Hidden behind `connector.Browser` |
 | Browser (option) | `playwright-go` (MIT) | — | Needs the Playwright driver downloaded at runtime (from memory): less "single binary" |
 | HTTP | `net/http` + `net/http/cookiejar` | `resty` | Cookies injected from the browser session |
 | Secrets | OS keyring (`zalando/go-keyring`) by default; Bitwarden through the `bw` CLI in v1 | `99designs/keyring` | Other password managers later (see Security) |
@@ -140,7 +140,7 @@ facto/
   internal/
     orchestrator/       # run, resume, report
     connector/          # interface, registry, shared helpers
-    browser/            # rod/chromedp abstraction, sessions
+    browser/            # in-house CDP client (ADR 0008), pool, Chrome for Testing install
     normalize/          # naming, dedup, Factur-X
     store/              # SQLite (document index)
     secrets/            # providers: keyring, bitwarden, …
@@ -239,7 +239,7 @@ sequences and control characters removed, tokens masked, 128 bytes max).
 | `rate_limited` | Too many requests or anti-bot block | Retry later |
 | `interrupted` | The run was canceled while the connector was running | Run `facto collect` again |
 
-A restored session rejected with `auth_failed` (or `needs_login`) is reported `needs_login` and dropped: the saved session was refused, the credentials are untouched.
+A restored session rejected with `auth_failed` (or `needs_login`) is reported `needs_login` and dropped: the saved session was refused, the credentials are untouched. Every `needs_login` result carries a fixed report note naming `facto login <id>`, and every `auth_failed` result one naming `facto config <id>`. `facto config` is not implemented yet: until it is, the user fixes the references in `config.yaml`.
 
 **Declarative connectors.** For a service that exposes a real API (key, OAuth2 or JSON login), a YAML file is enough, with no recompilation. The engine can read an OpenAPI spec to validate paths and schemas.
 
@@ -299,14 +299,14 @@ Internal tool to build: `facto record <url>` opens a controlled browser and reco
 
 - **Site**: mel-ileo.fr, personal space. Login with the [customer number and a password](https://eau.selectra.info/ileo-lille/service-client), no 2FA mentioned.
 - **Documents**: with e-invoicing, [invoices are archived for 10 years](https://eau.selectra.info/ileo-lille/espace-client-mon-compte) under "Mes factures". An email announces each new invoice.
-- **Approach**: direct HTTP login if the form allows it, otherwise rod for login then `net/http` for the list. A good "reference" connector to validate the architecture.
+- **Approach**: direct HTTP login if the form allows it, otherwise the browser for login then `net/http` for the list. A good "reference" connector to validate the architecture.
 - **Dedup key**: invoice number.
 
 ### EDF (electricity)
 
 - **Site**: espace-client.edf.fr. Woob traces show an OpenAM-style SSO with a `/sso/json/authenticate` endpoint ([Woob issue](https://gitlab.com/woob/woob/-/issues/661)). The same issue shows a login failure caused by a security 2FA in 2023.
 - **Documents**: the customer portal lets you [download invoices over 5 years](https://www.fournisseurs-electricite.com/edf/facture/justificatif-domicile-attestation). A yearly collection is more than enough.
-- **Approach**: rod in visible mode for login (email or SMS 2FA typed by the user), save cookies, then internal JSON calls. Read the Woob `edfparticulier` module (LGPLv3+) to understand the flow, without copying it.
+- **Approach**: the browser in visible mode for login (email or SMS 2FA typed by the user), save cookies, then internal JSON calls. Read the Woob `edfparticulier` module (LGPLv3+) to understand the flow, without copying it.
 - **Risk**: anti-bot and frequent SSO changes. Plan for `facto doctor edf`.
 
 ### Bouygues Telecom (internet box)
@@ -510,8 +510,8 @@ Protected assets: credentials, the Bitwarden session key, supplier cookies and t
 
 | Threat | Vector | Mitigation |
 | --- | --- | --- |
-| Cookie theft through the automated browser | A local process connects to the CDP port | CDP over a pipe (no open port); otherwise a random port on 127.0.0.1, browser closed as soon as possible |
-| Reading the Chromium profile | Cookie database and cache on disk | Temporary profile in a 0700 folder (tmpfs on Linux), deleted at the end of the run, never the personal profile |
+| Cookie theft through the automated browser | A local process connects to the CDP port | CDP over a pipe (no open port) on Linux and macOS; on Windows a random port on 127.0.0.1, browser closed as soon as possible (accepted risk, ADR 0008) |
+| Reading the Chromium profile | Cookie database and cache on disk | Temporary 0700 profile per browser launch (`$XDG_RUNTIME_DIR/facto`, else `<state_dir>/tmp`), deleted when the browser exits, stale ones swept at startup, never the personal profile |
 | Reading persisted sessions | `.facto/sessions/` file | AEAD encryption, key per connector in the OS keyring (ADR 0009); `sessions: ephemeral` option |
 | Leak through sync | State folder inside Google Drive | Refuse to start if `.facto/` is under the output folder or a known synced folder |
 | Leak in logs, reports, errors | HTTP request or response logged | Masked `Secret` type, redaction by key and by pattern, HTTP bodies never logged |
@@ -526,9 +526,9 @@ Protected assets: credentials, the Bitwarden session key, supplier cookies and t
 
 The browser is the most sensitive component: it holds cookies in clear during login.
 
-- **No exposed debugging port.** Any process reaching the CDP port can request the cookies: the technique has [circulated publicly since at least 2018](https://labs.cloudsecurityalliance.org/research/csa-research-note-chrome-devtools-session-hijacking-20260817/). `--remote-debugging-pipe` opens no port. Its support in rod or chromedp must be checked and is a library selection criterion; otherwise a random port bound to 127.0.0.1 with minimal lifetime.
-- **Dedicated, disposable profile.** Since Chrome 136, remote debugging is [ignored on the default profile](https://developer.chrome.com/blog/remote-debugging-port) and requires a dedicated `--user-data-dir`. facto creates a 0700 temporary folder per run (`$XDG_RUNTIME_DIR` on Linux), extracts the useful cookies, encrypts them, then deletes the profile.
-- **Chrome for Testing.** Google [recommends it for automation](https://developer.chrome.com/blog/remote-debugging-port). Pinned version, download verified by checksum.
+- **No exposed debugging port.** Any process reaching the CDP port can request the cookies: the technique has [circulated publicly since at least 2018](https://labs.cloudsecurityalliance.org/research/csa-research-note-chrome-devtools-session-hijacking-20260817/). `--remote-debugging-pipe` opens no port. facto uses it on Linux and macOS through its own CDP client ([ADR 0008](adr/0008-browser-cdp-pipe.md)). On Windows, until the pipe works there ([issue #3](https://github.com/FlorianRuen/facto/issues/3)), Chrome gets a random port bound to 127.0.0.1 with minimal lifetime: an accepted medium risk.
+- **Dedicated, disposable profile.** Since Chrome 136, remote debugging is [ignored on the default profile](https://developer.chrome.com/blog/remote-debugging-port) and requires a dedicated `--user-data-dir`. facto creates a 0700 profile folder per browser launch under `$XDG_RUNTIME_DIR/facto`, or `<state_dir>/tmp` when `XDG_RUNTIME_DIR` is not set (A12), extracts the useful cookies, encrypts them, then deletes the profile once the browser has exited. Profiles left by a crashed run are swept at startup.
+- **Chrome for Testing.** Google [recommends it for automation](https://developer.chrome.com/blog/remote-debugging-port). Pinned version, installed only by `facto browser install` (never downloaded silently), download verified by size and SHA-256. Chrome for Testing publishes no checksum, so the pin is trust on first use (ADR 0008).
 - **Minimal browser.** No extensions, no sync, no password saving, no crash reports. Credentials are typed into fields over CDP, never passed in a URL.
 - **Short life.** The browser is launched for login only, then closed: everything else goes through `net/http`.
 
@@ -601,6 +601,7 @@ browser:
 | `facto init` | First-time setup wizard |
 | `facto add <connector>` | Add an account (secret references) |
 | `facto login <connector>` | Interactive login, visible browser window when needed; one-time codes are read on the terminal without echo; the session is saved encrypted. Needs an interactive terminal (otherwise exit `2`); exit `1` when the supplier refuses the login |
+| `facto browser install` | Download the pinned Chrome for Testing build (linux64 in J1), verify its size and SHA-256, unpack it into `<state_dir>/chrome`. The only way facto downloads a browser; other platforms set `browser.path` |
 | `facto collect [--year N \| --since DATE] [--only edf,ileo]` | Collect, normalize, store |
 | `facto status` | State of each connector and last collection date |
 | `facto doctor <connector>` | Check the real flow and diagnose breakage |
@@ -820,7 +821,7 @@ No dates are set: a gate must be passed before the next milestone opens. J0 and 
 | A site changes and breaks a connector | High | Fixtures, `facto doctor`, `inbox/` fallback, explicit `broken` state |
 | 2FA required on every login, incompatible with scheduling | Medium | Persistent sessions, `needs_login` state + notification |
 | Anti-bot block or account lockout | Medium | Real browser, human pace, no parallelism per site |
-| rod maintenance (last release mid-2024) | Medium | `browser` interface with a chromedp fallback |
+| Owning the CDP client (CDP changes between Chrome versions) | Medium | Pinned Chrome for Testing, real-Chrome e2e tests on every pin bump, chromedp recorded as fallback (ADR 0008) |
 | Google OAuth client (publishing, token expiry) | Medium | Personal client option, Google Drive for desktop option |
 | Lack of maintainers with accounts | High over time | `facto record`, sheet template, public status per connector |
 | Agents weaken tests or drift from conventions | Medium | Hooks, reviewer agent, CI rules, test files protected in the implementer's instructions |
