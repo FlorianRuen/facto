@@ -12,3 +12,11 @@ aac8b409e9cb03ed17dfae299c6a4b13a9a37c76:test/e2e/fakesite_unit_test.go:generic-
 
 # synthetic test value: pinned-URL redaction marker "synthetic-pin-secret-0f3c"; history not rewritten (no force-push); SEC-J0-14 tracking issue (BLOCKED H1)
 784d28e488f1d32d030e712ec84fe423b978b6f4:internal/httpx/pinned_test.go:generic-api-key:322
+
+# Same synthetic values in local-only refs (agent worktree branches and one stash,
+# never pushed); gitleaks detect scans every local ref. Kept until Florian prunes
+# those refs; SEC-J0-14 tracking issue (BLOCKED H1).
+46646bf275df31a31836cc04265e7c3fe3aad7f0:internal/connector/attack_test.go:jwt:140
+228a8094f07b06d7a4a64147d0b72a1c788c4bd0:test/e2e/fakesite_unit_test.go:generic-api-key:34
+f2d1e38908b417bb89b1245088a8e1eedfb28335:test/e2e/fakesite_unit_test.go:generic-api-key:34
+9461ba1585613ed02f2025287cff9db797214702:internal/httpx/pinned_test.go:generic-api-key:322
