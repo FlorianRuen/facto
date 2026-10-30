@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/FlorianRuen/facto/internal/browser"
 )
@@ -77,6 +78,24 @@ type fakeCDP struct {
 	// onVisiblePoll runs (without the lock) after each JSVisible answer.
 	onVisiblePoll func(n int)
 
+	// T9 additions (support only; unset, they change nothing).
+	//
+	// intercept answers a method before the model like override, but a nil
+	// result falls through to the model (and its session check).
+	intercept map[string]func(c cdpCall) any
+	// onFunction runs (without the lock) after each Runtime.callFunctionOn
+	// answered by the model, with its functionDeclaration.
+	onFunction func(decl string)
+	// loaderID is the main frame loaderId Page.getFrameTree reports
+	// ("loader-1" unless setLoader changed it).
+	loaderID string
+	// children are the session ids of targets attached with attachChild:
+	// page-domain methods are accepted on them too.
+	children map[string]bool
+	// changed is closed (and replaced) each time a call is recorded:
+	// waitCalls blocks on it instead of sleeping.
+	changed chan struct{}
+
 	out       chan []byte
 	closeOnce sync.Once
 	closed    chan struct{}
@@ -94,6 +113,11 @@ func newFakeCDP(t *testing.T) *fakeCDP {
 		override: map[string]func(c cdpCall) any{},
 		out:      make(chan []byte, 1024),
 		closed:   make(chan struct{}),
+
+		intercept: map[string]func(c cdpCall) any{},
+		loaderID:  "loader-1",
+		children:  map[string]bool{},
+		changed:   make(chan struct{}),
 	}
 }
 
@@ -114,6 +138,8 @@ func (f *fakeCDP) Send(msg []byte) error {
 	}
 	f.mu.Lock()
 	f.calls = append(f.calls, call)
+	close(f.changed)
+	f.changed = make(chan struct{})
 	f.mu.Unlock()
 
 	result, hook := f.answer(call)
@@ -175,6 +201,18 @@ func (f *fakeCDP) answer(c cdpCall) (any, func()) {
 	if ov != nil {
 		return ov(c), nil
 	}
+	f.mu.Lock()
+	ic := f.intercept[c.Method]
+	child := f.children[c.Session]
+	f.mu.Unlock()
+	if ic != nil {
+		if r := ic(c); r != nil {
+			return r, nil
+		}
+	}
+	if child && pageSessionMethod(c.Method) {
+		return map[string]any{}, nil
+	}
 	if pageSessionMethod(c.Method) && c.Session != fakeSessionID {
 		f.t.Errorf("fake cdp: %s sent on session %q, want the attached page session", c.Method, c.Session)
 		return &cdpErr{code: -32001}, nil
@@ -204,7 +242,7 @@ func (f *fakeCDP) answer(c cdpCall) (any, func()) {
 			u = f.frameURL
 		}
 		return map[string]any{"frameTree": map[string]any{"frame": map[string]any{
-			"id": fakeFrameID, "loaderId": "loader-1", "url": u, "securityOrigin": originOf(u), "mimeType": "text/html",
+			"id": fakeFrameID, "loaderId": f.loaderID, "url": u, "securityOrigin": originOf(u), "mimeType": "text/html",
 		}}}, nil
 	case "Page.createIsolatedWorld":
 		if id, _ := c.Params["frameId"].(string); id != fakeFrameID {
@@ -218,7 +256,18 @@ func (f *fakeCDP) answer(c cdpCall) (any, func()) {
 		}
 		return map[string]any{"result": map[string]any{"type": "object", "className": "HTMLDocument", "objectId": obj}}, nil
 	case "Runtime.callFunctionOn":
-		return f.callFunction(c)
+		res, hook := f.callFunction(c)
+		if f.onFunction != nil {
+			cb, prev := f.onFunction, hook
+			decl, _ := c.Params["functionDeclaration"].(string)
+			hook = func() {
+				if prev != nil {
+					prev()
+				}
+				cb(decl)
+			}
+		}
+		return res, hook
 	case "Storage.getCookies":
 		if id, _ := c.Params["browserContextId"].(string); id != fakeContextID {
 			f.t.Errorf("fake cdp: Storage.getCookies browserContextId = %q, want %q (never the default context)", id, fakeContextID)
@@ -432,4 +481,126 @@ func firstArg(c cdpCall) (string, bool) {
 	}
 	s, ok := a["value"].(string)
 	return s, ok
+}
+
+// --- T9 support: events, child targets, waiting ---------------------
+
+// emit sends a CDP event (no id) from the fake browser on session ("" is
+// the browser session).
+func (f *fakeCDP) emit(session, method string, params any) {
+	f.t.Helper()
+	ev := map[string]any{"method": method, "params": params}
+	if session != "" {
+		ev["sessionId"] = session
+	}
+	b, err := json.Marshal(ev)
+	if err != nil {
+		f.t.Fatalf("fake cdp: marshal event: %v", err)
+	}
+	f.emitRaw(string(b))
+}
+
+// emitRaw sends frame as is (it may be malformed on purpose).
+func (f *fakeCDP) emitRaw(frame string) {
+	select {
+	case f.out <- []byte(frame):
+	case <-f.closed:
+	}
+}
+
+// attachChild registers child as an attached target session and emits
+// Target.attachedToTarget on parent for it, paused waiting for the
+// debugger, in the login browser context.
+func (f *fakeCDP) attachChild(parent, child, targetID, typ string, extra map[string]any) {
+	f.t.Helper()
+	f.mu.Lock()
+	f.children[child] = true
+	f.mu.Unlock()
+	info := map[string]any{
+		"targetId": targetID, "type": typ, "title": "", "url": "",
+		"attached": true, "browserContextId": fakeContextID,
+	}
+	for k, v := range extra {
+		info[k] = v
+	}
+	f.emit(parent, "Target.attachedToTarget", map[string]any{
+		"sessionId": child, "targetInfo": info, "waitingForDebugger": true,
+	})
+}
+
+// requestPaused emits Fetch.requestPaused on session for rawURL.
+func (f *fakeCDP) requestPaused(session, requestID, rawURL, resourceType string, extra map[string]any) {
+	f.t.Helper()
+	p := map[string]any{
+		"requestId": requestID,
+		"frameId":   fakeFrameID,
+		"request": map[string]any{
+			"url": rawURL, "method": "GET", "headers": map[string]any{},
+			"initialPriority": "High", "referrerPolicy": "strict-origin-when-cross-origin",
+		},
+		"resourceType": resourceType,
+		"networkId":    "net-" + requestID,
+	}
+	for k, v := range extra {
+		p[k] = v
+	}
+	f.emit(session, "Fetch.requestPaused", p)
+}
+
+func (f *fakeCDP) setLoader(id string) {
+	f.mu.Lock()
+	f.loaderID = id
+	f.mu.Unlock()
+}
+
+func (f *fakeCDP) setIntercept(method string, fn func(c cdpCall) any) {
+	f.mu.Lock()
+	f.intercept[method] = fn
+	f.mu.Unlock()
+}
+
+func (f *fakeCDP) setOnFunction(fn func(decl string)) {
+	f.mu.Lock()
+	f.onFunction = fn
+	f.mu.Unlock()
+}
+
+// waitCalls blocks until at least n recorded calls satisfy match and
+// returns them; it fails the test after 20 s (no sleep: it wakes on each
+// recorded call).
+func (f *fakeCDP) waitCalls(t *testing.T, n int, match func(c cdpCall) bool) []cdpCall {
+	t.Helper()
+	timeout := time.NewTimer(20 * time.Second)
+	defer timeout.Stop()
+	for {
+		f.mu.Lock()
+		var got []cdpCall
+		for _, c := range f.calls {
+			if match(c) {
+				got = append(got, c)
+			}
+		}
+		ch := f.changed
+		all := methods(f.calls)
+		f.mu.Unlock()
+		if len(got) >= n {
+			return got
+		}
+		select {
+		case <-ch:
+		case <-timeout.C:
+			t.Fatalf("fake cdp: waited for %d matching calls, got %d; calls: %q", n, len(got), all)
+			return nil
+		}
+	}
+}
+
+// isCall matches method on session, and requestId when not empty.
+func isCall(method, session, requestID string) func(c cdpCall) bool {
+	return func(c cdpCall) bool {
+		if c.Method != method || c.Session != session {
+			return false
+		}
+		return requestID == "" || c.Params["requestId"] == requestID
+	}
 }

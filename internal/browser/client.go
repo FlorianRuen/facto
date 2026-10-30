@@ -10,8 +10,9 @@ import (
 )
 
 // Client is a CDP client over one Transport: it numbers requests, matches
-// responses by id and session id, and drops anything else (unknown ids,
-// responses for another session, late duplicates, events). Errors never
+// responses by id and session id, dispatches events to subscribers
+// (Subscribe) and drops anything else (unknown ids, responses for another
+// session, late duplicates, events nobody subscribed to). Errors never
 // quote a message, a parameter, a session id or a CDP error text.
 type Client struct {
 	t Transport
@@ -24,6 +25,7 @@ type Client struct {
 
 	mu      sync.Mutex
 	pending map[int64]*pendingCall
+	subs    map[eventKey][]*Subscription
 	err     error // sticky: set once, the client is then dead
 
 	fatalOnce sync.Once
@@ -48,10 +50,13 @@ type request struct {
 }
 
 // incoming is the part of a browser message the client reads. An event has
-// no id.
+// no id. A method or session id that is not a string fails the decoding:
+// the client dies with ErrBadFrame.
 type incoming struct {
 	ID        *int64          `json:"id"`
+	Method    string          `json:"method"`
 	SessionID string          `json:"sessionId"`
+	Params    json.RawMessage `json:"params"`
 	Result    json.RawMessage `json:"result"`
 	Error     *struct {
 		Code int64 `json:"code"`
@@ -65,7 +70,7 @@ func NewClient(t Transport) *Client {
 }
 
 func newClient(t Transport, fatal func()) *Client {
-	c := &Client{t: t, fatal: fatal, pending: map[int64]*pendingCall{}}
+	c := &Client{t: t, fatal: fatal, pending: map[int64]*pendingCall{}, subs: map[eventKey][]*Subscription{}}
 	go c.readLoop()
 	return c
 }
@@ -169,6 +174,12 @@ func (c *Client) fail(err error) {
 		pc.ch <- response{err: c.err}
 		delete(c.pending, id)
 	}
+	for k, list := range c.subs {
+		for _, s := range list {
+			s.closeLocked()
+		}
+		delete(c.subs, k)
+	}
 	c.mu.Unlock()
 	_ = c.t.Close()
 }
@@ -197,7 +208,12 @@ func (c *Client) readLoop() {
 			return
 		}
 		if m.ID == nil {
-			continue // event: dispatched from T8 on
+			if !c.dispatch(m) {
+				// Never quote the method, the session id or the params.
+				c.die(fmt.Errorf("%w: a fail-closed subscription is full", ErrEventOverflow))
+				return
+			}
+			continue
 		}
 		c.mu.Lock()
 		pc, ok := c.pending[*m.ID]

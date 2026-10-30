@@ -38,6 +38,9 @@ var (
 	// errPageScript: a page function threw or answered an unexpected
 	// shape. Unexported: callers see it wrapped, never quoted.
 	errPageScript = errors.New("browser: page script failed")
+	// errFrameChanged: the main frame committed a new document (loaderId)
+	// or URL while a page function ran: its answer is not trusted.
+	errFrameChanged = errors.New("browser: main frame changed during the check")
 )
 
 // Timeouts and pauses of the page.
@@ -134,7 +137,36 @@ type Page struct {
 	targetID  string
 	sessionID string
 
+	// bg is the context of the enforcement calls (fetch.go); cancel ends
+	// it when the page stops.
+	bg     context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+
+	// subsMu guards the enforcement bookkeeping (fetch.go): the watched
+	// sessions, the running handler goroutines and stopped.
+	subsMu      sync.Mutex
+	sessions    map[string]*watched
+	running     int
+	subsChanged chan struct{} // closed and replaced on each change
+	stopped     bool
+
+	blockedMu sync.Mutex
+	blocked   map[string]int
+
+	// worldMu guards world, the isolated world of one document.
+	worldMu sync.Mutex
+	world   *isolatedWorld
+
 	closeOnce sync.Once
+}
+
+// isolatedWorld is the cached isolated world of one main frame document
+// (frame id + loaderId) and its document object.
+type isolatedWorld struct {
+	frameID, loaderID string
+	contextID         int64
+	docObjectID       string
 }
 
 var _ connector.Browser = (*Page)(nil)
@@ -145,10 +177,14 @@ var _ connector.Browser = (*Page)(nil)
 //  2. Browser.setDownloadBehavior deny for that context;
 //  3. Target.createTarget at about:blank in that context;
 //  4. Target.attachToTarget with flatten;
-//  5. page-session setup (Page.enable). It never navigates.
+//  5. page-session setup (Page.enable);
+//  6. the in-browser allowlist (fetch.go): fail-closed subscriptions to
+//     Fetch.requestPaused and Target.attachedToTarget, Fetch.enable on
+//     every URL of the page session, then Target.setAutoAttach (paused
+//     until enforced) on the page and browser sessions.
 //
-// An invalid allowlist is refused before any CDP call. A failure after step
-// 1 disposes the context.
+// It never navigates. An invalid allowlist is refused before any CDP call.
+// A failure after step 1 disposes the context.
 func NewPage(ctx context.Context, c *Client, opts PageOptions) (*Page, error) {
 	domains, err := normalizeDomains(opts.AllowedDomains)
 	if err != nil {
@@ -158,7 +194,11 @@ func NewPage(ctx context.Context, c *Client, opts PageOptions) (*Page, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidDomain, err)
 	}
-	p := &Page{c: c, allow: allow, log: opts.Log, wait: opts.PollWait}
+	p := &Page{
+		c: c, allow: allow, log: opts.Log, wait: opts.PollWait, blocked: map[string]int{},
+		sessions: map[string]*watched{}, subsChanged: make(chan struct{}),
+	}
+	p.bg, p.cancel = context.WithCancel(context.WithoutCancel(ctx))
 	if p.log == nil {
 		p.log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -170,9 +210,11 @@ func NewPage(ctx context.Context, c *Client, opts PageOptions) (*Page, error) {
 		BrowserContextID string `json:"browserContextId"`
 	}
 	if err := p.call(ctx, "", "Target.createBrowserContext", map[string]any{"disposeOnDetach": true}, &created); err != nil {
+		p.cancel()
 		return nil, fmt.Errorf("new page: create browser context: %w", err)
 	}
 	if created.BrowserContextID == "" {
+		p.cancel()
 		return nil, fmt.Errorf("new page: create browser context: %w", errPageScript)
 	}
 	p.contextID = created.BrowserContextID
@@ -185,7 +227,7 @@ func NewPage(ctx context.Context, c *Client, opts PageOptions) (*Page, error) {
 	return p, nil
 }
 
-// setup runs NewPage steps 2 to 5.
+// setup runs NewPage steps 2 to 6.
 func (p *Page) setup(ctx context.Context) error {
 	if err := p.call(ctx, "", "Browser.setDownloadBehavior", map[string]any{
 		"behavior": "deny", "browserContextId": p.contextID,
@@ -218,6 +260,17 @@ func (p *Page) setup(ctx context.Context) error {
 	p.sessionID = attached.SessionID
 	if err := p.call(ctx, p.sessionID, "Page.enable", nil, nil); err != nil {
 		return fmt.Errorf("new page: enable page domain: %w", err)
+	}
+	p.watch("", rootParent, false, true)
+	p.watch(p.sessionID, rootParent, true, true)
+	if err := p.call(ctx, p.sessionID, "Fetch.enable", fetchEnableParams, nil); err != nil {
+		return fmt.Errorf("new page: enable fetch: %w", err)
+	}
+	if err := p.call(ctx, p.sessionID, "Target.setAutoAttach", autoAttachParams, nil); err != nil {
+		return fmt.Errorf("new page: auto attach: %w", err)
+	}
+	if err := p.call(ctx, "", "Target.setAutoAttach", autoAttachParams, nil); err != nil {
+		return fmt.Errorf("new page: auto attach pop-ups: %w", err)
 	}
 	return nil
 }
@@ -273,10 +326,8 @@ func (p *Page) Navigate(ctx context.Context, rawURL string) error {
 
 // checkURL applies the Navigate rules. The error never quotes the URL.
 func (p *Page) checkURL(raw string) error {
-	for i := range len(raw) {
-		if c := raw[i]; c <= ' ' || c == 0x7f || c == '\\' {
-			return fmt.Errorf("%w: control character, space or backslash", ErrURLRefused)
-		}
+	if hasUnsafeChar(raw) {
+		return fmt.Errorf("%w: control character, space or backslash", ErrURLRefused)
 	}
 	u, err := url.Parse(raw)
 	switch {
@@ -305,25 +356,29 @@ func (p *Page) checkURL(raw string) error {
 // defaultHTTPSPort is the only port a page URL may name.
 const defaultHTTPSPort = "443"
 
-// mainFrame reads the main frame's id and URL from the browser
-// (Page.getFrameTree). The URL is the browser's truth: no page script can
+// frameState is the main frame as the browser reports it.
+type frameState struct {
+	ID       string `json:"id"`
+	LoaderID string `json:"loaderId"`
+	URL      string `json:"url"`
+}
+
+// mainFrame reads the main frame's id, loaderId and URL from the browser
+// (Page.getFrameTree). They are the browser's truth: no page script can
 // change what it reports.
-func (p *Page) mainFrame(ctx context.Context) (id, frameURL string, err error) {
+func (p *Page) mainFrame(ctx context.Context) (frameState, error) {
 	var tree struct {
 		FrameTree struct {
-			Frame struct {
-				ID  string `json:"id"`
-				URL string `json:"url"`
-			} `json:"frame"`
+			Frame frameState `json:"frame"`
 		} `json:"frameTree"`
 	}
 	if err := p.call(ctx, p.sessionID, "Page.getFrameTree", nil, &tree); err != nil {
-		return "", "", err
+		return frameState{}, err
 	}
 	if tree.FrameTree.Frame.ID == "" {
-		return "", "", fmt.Errorf("%w: no main frame", errPageScript)
+		return frameState{}, fmt.Errorf("%w: no main frame", errPageScript)
 	}
-	return tree.FrameTree.Frame.ID, tree.FrameTree.Frame.URL, nil
+	return tree.FrameTree.Frame, nil
 }
 
 // remoteValue is the part of a Runtime.callFunctionOn answer the page reads.
@@ -335,24 +390,84 @@ type remoteValue struct {
 }
 
 // run calls the constant page function decl with sel as arguments[0].value
-// on the main frame's document, in a fresh isolated world of that frame,
-// and decodes its by-value result into out. It returns the main frame URL
-// read from the browser just before the function ran.
-func (p *Page) run(ctx context.Context, decl, sel string, out any) (string, error) {
-	frameID, frameURL, err := p.mainFrame(ctx)
+// on the main frame's document, in the isolated world of that document
+// (cached per frame id + loaderId), and decodes its by-value result into
+// out. It reads the main frame before and after the function: a different
+// frame id, loaderId or URL afterwards means a navigation committed
+// mid-check and gives errFrameChanged. It returns the main frame state
+// read before the function ran.
+func (p *Page) run(ctx context.Context, decl, sel string, out any) (frameState, error) {
+	before, err := p.mainFrame(ctx)
 	if err != nil {
-		return "", err
+		return frameState{}, err
+	}
+	rv, err := p.callInWorld(ctx, before, decl, sel)
+	if err != nil {
+		return frameState{}, err
+	}
+	after, err := p.mainFrame(ctx)
+	if err != nil {
+		return frameState{}, err
+	}
+	if after != before {
+		return frameState{}, errFrameChanged
+	}
+	if rv.ExceptionDetails != nil {
+		return frameState{}, fmt.Errorf("%w: exception", errPageScript)
+	}
+	if json.Unmarshal(rv.Result.Value, out) != nil {
+		return frameState{}, fmt.Errorf("%w: unexpected value", errPageScript)
+	}
+	return before, nil
+}
+
+// callInWorld runs decl on the document of fr's isolated world. A CDP
+// error in a cached world (its context was destroyed) drops it and retries
+// once in a fresh one.
+func (p *Page) callInWorld(ctx context.Context, fr frameState, decl, sel string) (remoteValue, error) {
+	for {
+		w, cached, err := p.isolatedWorld(ctx, fr)
+		if err != nil {
+			return remoteValue{}, err
+		}
+		var rv remoteValue
+		err = p.call(ctx, p.sessionID, "Runtime.callFunctionOn", map[string]any{
+			"functionDeclaration": decl,
+			"objectId":            w.docObjectID,
+			"arguments":           []map[string]any{{"value": sel}},
+			"returnByValue":       true,
+			"awaitPromise":        false,
+		}, &rv)
+		if err == nil {
+			return rv, nil
+		}
+		p.dropWorld(w)
+		if !cached || !errors.Is(err, ErrCDP) {
+			return remoteValue{}, err
+		}
+	}
+}
+
+// isolatedWorld returns the isolated world of fr's document, creating it
+// (and reading its document object) when the cache holds another one.
+// cached reports a cache hit.
+func (p *Page) isolatedWorld(ctx context.Context, fr frameState) (w *isolatedWorld, cached bool, err error) {
+	p.worldMu.Lock()
+	w = p.world
+	p.worldMu.Unlock()
+	if w != nil && w.frameID == fr.ID && w.loaderID == fr.LoaderID {
+		return w, true, nil
 	}
 	var world struct {
 		ExecutionContextID int64 `json:"executionContextId"`
 	}
 	if err := p.call(ctx, p.sessionID, "Page.createIsolatedWorld", map[string]any{
-		"frameId": frameID, "worldName": isolatedWorldName, "grantUniveralAccess": false,
+		"frameId": fr.ID, "worldName": isolatedWorldName, "grantUniveralAccess": false,
 	}, &world); err != nil {
-		return "", err
+		return nil, false, err
 	}
 	if world.ExecutionContextID == 0 {
-		return "", fmt.Errorf("%w: no isolated world", errPageScript)
+		return nil, false, fmt.Errorf("%w: no isolated world", errPageScript)
 	}
 	var doc struct {
 		Result struct {
@@ -363,28 +478,25 @@ func (p *Page) run(ctx context.Context, decl, sel string, out any) (string, erro
 	if err := p.call(ctx, p.sessionID, "Runtime.evaluate", map[string]any{
 		"expression": documentExpression, "contextId": world.ExecutionContextID, "returnByValue": false,
 	}, &doc); err != nil {
-		return "", err
+		return nil, false, err
 	}
 	if doc.ExceptionDetails != nil || doc.Result.ObjectID == "" {
-		return "", fmt.Errorf("%w: no document", errPageScript)
+		return nil, false, fmt.Errorf("%w: no document", errPageScript)
 	}
-	var rv remoteValue
-	if err := p.call(ctx, p.sessionID, "Runtime.callFunctionOn", map[string]any{
-		"functionDeclaration": decl,
-		"objectId":            doc.Result.ObjectID,
-		"arguments":           []map[string]any{{"value": sel}},
-		"returnByValue":       true,
-		"awaitPromise":        false,
-	}, &rv); err != nil {
-		return "", err
+	w = &isolatedWorld{frameID: fr.ID, loaderID: fr.LoaderID, contextID: world.ExecutionContextID, docObjectID: doc.Result.ObjectID}
+	p.worldMu.Lock()
+	p.world = w
+	p.worldMu.Unlock()
+	return w, false, nil
+}
+
+// dropWorld forgets w when it is still the cached world.
+func (p *Page) dropWorld(w *isolatedWorld) {
+	p.worldMu.Lock()
+	if p.world == w {
+		p.world = nil
 	}
-	if rv.ExceptionDetails != nil {
-		return "", fmt.Errorf("%w: exception", errPageScript)
-	}
-	if json.Unmarshal(rv.Result.Value, out) != nil {
-		return "", fmt.Errorf("%w: unexpected value", errPageScript)
-	}
-	return frameURL, nil
+	p.worldMu.Unlock()
 }
 
 // WaitVisible polls until the element matching selector is visible, with
@@ -395,7 +507,8 @@ func (p *Page) WaitVisible(ctx context.Context, selector string) error {
 			return fmt.Errorf("wait visible: %w", err)
 		}
 		var visible bool
-		if _, err := p.run(ctx, jsVisible, selector, &visible); err != nil {
+		// A document committed mid-poll is not an error: poll again.
+		if _, err := p.run(ctx, jsVisible, selector, &visible); err != nil && !errors.Is(err, errFrameChanged) {
 			return fmt.Errorf("wait visible: %w", err)
 		}
 		if visible {
@@ -458,9 +571,11 @@ func (p *Page) TypeSecret(ctx context.Context, selector string, value secret.Sec
 	if !focused {
 		return fmt.Errorf("type secret: %w", ErrNotVisible)
 	}
-	if reason, err := p.typingTarget(ctx, selector); err != nil {
+	loaderID, reason, err := p.typingTarget(ctx, selector, "")
+	if err != nil {
 		return fmt.Errorf("type secret: %w", err)
-	} else if reason != "" {
+	}
+	if reason != "" {
 		p.log.Debug("browser: secret typing refused", "reason", reason)
 		return fmt.Errorf("type secret: %w: %s", ErrTypeRefused, reason)
 	}
@@ -469,7 +584,7 @@ func (p *Page) TypeSecret(ctx context.Context, selector string, value secret.Sec
 	if err := p.call(ctx, p.sessionID, "Input.insertText", insertText{Text: value.Expose()}, nil); err != nil {
 		return fmt.Errorf("type secret: %w", err)
 	}
-	reason, err := p.typingTarget(ctx, selector)
+	_, reason, err = p.typingTarget(ctx, selector, loaderID)
 	if err != nil {
 		return fmt.Errorf("type secret: after typing: %w", err)
 	}
@@ -480,23 +595,28 @@ func (p *Page) TypeSecret(ctx context.Context, selector string, value secret.Sec
 	return nil
 }
 
-// typingTarget runs jsActiveCheck and returns why typing into selector is
-// refused ("" when allowed): the focus is not on it in the main frame, or
-// the main frame URL reported by the browser is not https or not
-// allowlisted. The origin in the script's answer is not trusted.
-func (p *Page) typingTarget(ctx context.Context, selector string) (string, error) {
+// typingTarget runs jsActiveCheck and returns the main frame loaderId and
+// why typing into selector is refused ("" when allowed): a navigation
+// committed during the check, the document is not wantLoader (when not
+// empty), the focus is not on the input in the main frame, or the main
+// frame URL reported by the browser is not https or not allowlisted. The
+// origin in the script's answer is not trusted.
+func (p *Page) typingTarget(ctx context.Context, selector, wantLoader string) (loaderID, reason string, err error) {
 	var chk activeCheck
-	frameURL, err := p.run(ctx, jsActiveCheck, selector, &chk)
-	if err != nil {
-		return "", err
+	fr, err := p.run(ctx, jsActiveCheck, selector, &chk)
+	switch {
+	case errors.Is(err, errFrameChanged):
+		return "", "the page navigated during the check", nil
+	case err != nil:
+		return "", "", err
+	case wantLoader != "" && fr.LoaderID != wantLoader:
+		return "", "the page loaded a new document", nil
+	case !chk.Matches:
+		return "", "focus is not on the expected input of the main frame", nil
+	case p.checkURL(fr.URL) != nil:
+		return "", "page url is not https or not allowlisted", nil
 	}
-	if !chk.Matches {
-		return "focus is not on the expected input of the main frame", nil
-	}
-	if p.checkURL(frameURL) != nil {
-		return "page url is not https or not allowlisted", nil
-	}
-	return "", nil
+	return fr.LoaderID, "", nil
 }
 
 // insertText is the Input.insertText params.
@@ -591,6 +711,7 @@ func cookieExpiry(expires float64, session bool) time.Time {
 func (p *Page) Close() error {
 	var err error
 	p.closeOnce.Do(func() {
+		p.stop()
 		ctx, cancel := context.WithTimeout(context.Background(), disposeTimeout)
 		defer cancel()
 		if _, e := p.c.Call(ctx, "", "Target.disposeBrowserContext", map[string]any{"browserContextId": p.contextID}); e != nil {
@@ -602,6 +723,7 @@ func (p *Page) Close() error {
 
 // dispose is NewPage's cleanup: bounded, and run even when ctx has ended.
 func (p *Page) dispose(ctx context.Context) {
+	p.stop()
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), disposeTimeout)
 	defer cancel()
 	_, _ = p.c.Call(ctx, "", "Target.disposeBrowserContext", map[string]any{"browserContextId": p.contextID})
