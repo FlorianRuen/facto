@@ -141,6 +141,9 @@ type sandbox struct {
 	extraEnv map[string]string // FACTO_E2E_* variables; "" values are omitted
 	stdin    []string          // lines fed to facto (scenario stdin key)
 	pid      atomic.Int64      // facto's pid while a run is in progress
+
+	mu          sync.Mutex
+	totpSecrets []string // TOTP codes handed to facto (secrets, stdin)
 }
 
 // factoPID is facto's pid during a run, 0 otherwise.
@@ -148,7 +151,15 @@ func (s *sandbox) factoPID() int { return int(s.pid.Load()) }
 
 func newSandbox(t *testing.T) *sandbox {
 	t.Helper()
-	root := t.TempDir()
+	// Not t.TempDir: its path embeds the test name, and the browser pool
+	// base (the scenario state dir's tmp, under HOME) must stay short
+	// enough for Chrome's private TMPDIR next to the profile
+	// (SingletonSocket path <= 107 bytes, browser.ErrSocketPathTooLong).
+	root, err := os.MkdirTemp("", "fe2e") // 0700
+	if err != nil {
+		t.Fatalf("sandbox: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	r, err := fsx.Open(root)
 	if err != nil {
 		t.Fatalf("sandbox: %v", err)
@@ -184,6 +195,9 @@ func (s *sandbox) env() []string {
 		"PATH=" + s.pathDir,
 		"LANG=C.UTF-8",
 		"TZ=UTC",
+		// A socket that never exists, outside HOME: the keyring client
+		// cannot fall back to the developer's /run/user/<uid>/bus.
+		"DBUS_SESSION_BUS_ADDRESS=unix:path=" + filepath.Join(s.root, "no-session-bus"),
 	}
 	keys := make([]string, 0, len(s.extraEnv))
 	for k := range s.extraEnv {
@@ -289,6 +303,9 @@ func (s *sandbox) run(t *testing.T, bin string, args []string) result {
 	cmd.Env = s.env()
 	cmd.Stdin = nil // /dev/null: not a terminal, collect never prompts
 	var feed sync.WaitGroup
+	var feedErr error
+	feedCtx, factoExited := context.WithCancel(ctx)
+	defer factoExited()
 	if len(s.stdin) > 0 {
 		// Canaries are expanded now; {{totp}} and {{outbox}} when written.
 		lines := make([]string, len(s.stdin))
@@ -304,13 +321,17 @@ func (s *sandbox) run(t *testing.T, bin string, args []string) result {
 		if err != nil {
 			t.Fatalf("stdin pipe: %v", err)
 		}
+		from := 0
+		if s.site != nil {
+			from = len(s.site.site.Outbox()) // {{outbox}}: codes of this run only
+		}
 		feed.Add(1)
 		defer func() {
 			_ = w.Close()
 		}()
 		go func() {
 			defer feed.Done()
-			s.feedStdin(ctx, t, w, lines)
+			feedErr = s.feedStdin(feedCtx, w, lines, from)
 		}()
 	}
 	var out, errOut bytes.Buffer
@@ -322,8 +343,12 @@ func (s *sandbox) run(t *testing.T, bin string, args []string) result {
 		err = cmd.Wait()
 		s.pid.Store(0)
 	}
+	factoExited()
 	if len(s.stdin) > 0 {
 		feed.Wait()
+		if feedErr != nil {
+			t.Errorf("%v", feedErr)
+		}
 	}
 	res := result{code: 0, stdout: out.Bytes(), stderr: errOut.Bytes()}
 	var ee *exec.ExitError
@@ -638,6 +663,11 @@ func diffSnapshots(before, after map[string]string) string {
 // or any file under HOME other than the setup files that held it.
 func (s *sandbox) checkNoCanary(t *testing.T, run string, r result) {
 	t.Helper()
+	if s.site != nil {
+		for _, f := range s.siteLeaks(s.siteSecrets(), r) {
+			t.Errorf("%s: %s", run, f)
+		}
+	}
 	if len(s.canaries) == 0 {
 		return
 	}

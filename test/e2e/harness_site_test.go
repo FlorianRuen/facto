@@ -8,6 +8,7 @@ package e2e
 // browser probes of each run.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -26,6 +27,7 @@ import (
 
 	"github.com/FlorianRuen/facto/internal/clock"
 	"github.com/FlorianRuen/facto/internal/fsx"
+	"github.com/FlorianRuen/facto/internal/testsecrets"
 )
 
 // chromeEnv names the Chrome for Testing executable, set by make e2e for
@@ -138,6 +140,9 @@ func (s *sandbox) startSite(t *testing.T, sc *Scenario) {
 	values := make(map[string]string, len(sc.Secrets))
 	for k, v := range sc.Secrets {
 		values[k] = expand(v)
+		if strings.Contains(v, "{{totp}}") {
+			s.addTOTP(values[k])
+		}
 	}
 	if len(values) > 0 {
 		dir := filepath.Join(s.root, "secrets")
@@ -160,6 +165,7 @@ func (s *sandbox) startSite(t *testing.T, sc *Scenario) {
 			Mode: f.Mode, Login: values[f.Login], Password: values[f.Password],
 			ExpireAfter: f.ExpireAfter, RateLimitAfter: f.RateLimitAfter,
 			Invoices: invs, TOTPSeed: seed, Now: now,
+			SessionValue: cookieCanaries(t),
 			OnLoginPage: func(*http.Request) {
 				pid := s.factoPID()
 				if pid == 0 {
@@ -196,18 +202,46 @@ func (s *sandbox) startSite(t *testing.T, sc *Scenario) {
 	s.extraEnv = env
 }
 
+// cookieCanaries returns a SessionValue minting cookie canaries (a pool
+// made now, on the test goroutine; random tokens once it is used up: those
+// are still hunted by siteLeaks, through IssuedSessions).
+func cookieCanaries(t *testing.T) func() string {
+	t.Helper()
+	const n = 8
+	var mu sync.Mutex
+	pool := make([]string, n)
+	for i := range pool {
+		pool[i] = testsecrets.Canary(t, testsecrets.Cookie)
+	}
+	return func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		if len(pool) == 0 {
+			return randomToken()
+		}
+		v := pool[0]
+		pool = pool[1:]
+		return v
+	}
+}
+
 // feedStdin writes the scenario's stdin lines to w, expanding {{totp}}
-// (at write time), {{outbox}} (the next email code, waited for) and
-// canaries, then closes w.
-func (s *sandbox) feedStdin(ctx context.Context, t *testing.T, w io.WriteCloser, lines []string) {
+// (at write time), {{outbox}} (the next email code sent from outbox index
+// from on, i.e. during this run, waited for) and canaries, then closes w.
+// ctx is cancelled when facto exits: a wait still pending then ends
+// without an error (facto did not ask, e.g. its session was restored).
+// An outbox wait that times out while facto runs is an error.
+func (s *sandbox) feedStdin(ctx context.Context, w io.WriteCloser, lines []string, from int) error {
 	defer func() { _ = w.Close() }()
-	next := 0
+	next := from
 	for _, line := range lines {
 		var failed error
 		v := ExpandFunc(line, func(name string) string {
 			switch {
 			case name == "totp" && s.site != nil:
-				return s.site.site.TOTP(clock.Real{}.Now())
+				code := s.site.site.TOTP(clock.Real{}.Now())
+				s.addTOTP(code)
+				return code
 			case name == "outbox" && s.site != nil:
 				wctx, cancel := context.WithTimeout(ctx, outboxTimeout)
 				defer cancel()
@@ -219,13 +253,128 @@ func (s *sandbox) feedStdin(ctx context.Context, t *testing.T, w io.WriteCloser,
 			return "" // canaries were expanded by run; Parse refused the rest
 		})
 		if failed != nil {
-			t.Errorf("stdin: %v", failed)
-			return
+			if ctx.Err() != nil {
+				return nil // facto exited without asking
+			}
+			return fmt.Errorf("stdin: %w", failed)
 		}
 		if _, err := io.WriteString(w, v+"\n"); err != nil {
-			return // facto exited or closed stdin
+			return nil // facto exited or closed stdin
 		}
 	}
+	return nil
+}
+
+// addTOTP records a TOTP code handed to facto, hunted by siteLeaks.
+func (s *sandbox) addTOTP(code string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.totpSecrets = append(s.totpSecrets, code)
+}
+
+// siteSecrets are the values the fake site minted for facto, or the TOTP
+// codes the harness handed it: none may appear in facto's output.
+type siteSecrets struct {
+	cookies    []string // fp_session values
+	emailCodes []string // outbox codes
+	totpCodes  []string // TOTP codes in secrets or stdin
+}
+
+// siteSecrets collects the current scan set.
+func (s *sandbox) siteSecrets() siteSecrets {
+	var out siteSecrets
+	if s.site != nil {
+		out.cookies = s.site.site.IssuedSessions()
+		out.emailCodes = s.site.site.Outbox()
+	}
+	s.mu.Lock()
+	out.totpCodes = slices.Clone(s.totpSecrets)
+	s.mu.Unlock()
+	return out
+}
+
+// textArtifact reports whether a file is text facto writes for people or
+// tools (logs, reports, config): the only files hunted for 6-digit codes,
+// where a hit cannot be a coincidence of binary data (PDF, SQLite, sealed
+// sessions).
+func textArtifact(rel string) bool {
+	switch strings.ToLower(path.Ext(rel)) {
+	case ".txt", ".json", ".jsonl", ".log", ".yaml", ".yml":
+		return true
+	}
+	return false
+}
+
+// containsNumber reports whether code occurs in data as a whole number
+// (no ASCII digit right before or after it).
+func containsNumber(data []byte, code string) bool {
+	c := []byte(code)
+	for off := 0; ; {
+		i := bytes.Index(data[off:], c)
+		if i < 0 {
+			return false
+		}
+		i += off
+		end := i + len(c)
+		before := i > 0 && data[i-1] >= '0' && data[i-1] <= '9'
+		after := end < len(data) && data[end] >= '0' && data[end] <= '9'
+		if !before && !after {
+			return true
+		}
+		off = i + 1
+	}
+}
+
+// siteLeaks returns one finding per (kind, place) where a value of sec
+// appears: session cookies in stdout, stderr or any file under HOME; codes
+// in stdout, stderr or text artifacts only (textArtifact). Findings name
+// the kind and the place, never the value.
+func (s *sandbox) siteLeaks(sec siteSecrets, r result) []string {
+	var out []string
+	scan := func(place string, data []byte, text bool) {
+		for _, c := range sec.cookies {
+			if c != "" && bytes.Contains(data, []byte(c)) {
+				out = append(out, "session cookie leaked to "+place)
+				break
+			}
+		}
+		if !text {
+			return
+		}
+		for _, k := range []struct {
+			kind  string
+			codes []string
+		}{{"email code", sec.emailCodes}, {"TOTP code", sec.totpCodes}} {
+			for _, c := range k.codes {
+				if c != "" && containsNumber(data, c) {
+					out = append(out, k.kind+" leaked to "+place)
+					break
+				}
+			}
+		}
+	}
+	scan("stdout", r.stdout, true)
+	scan("stderr", r.stderr, true)
+	err := filepath.WalkDir(s.home, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || !d.Type().IsRegular() {
+			return err
+		}
+		rel, err := filepath.Rel(s.home, p)
+		if err != nil {
+			return err
+		}
+		data, err := readIn(s.home, rel)
+		if err != nil {
+			return err
+		}
+		slashed := filepath.ToSlash(rel)
+		scan(slashed, data, textArtifact(slashed))
+		return nil
+	})
+	if err != nil {
+		out = append(out, "site secret scan failed: "+err.Error())
+	}
+	return out
 }
 
 // resetSite empties the request log and the probes before a run.

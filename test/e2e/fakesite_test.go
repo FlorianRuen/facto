@@ -62,6 +62,9 @@ type siteOptions struct {
 	Invoices        []siteInvoice
 	TOTPSeed        []byte           // nil = 20 random bytes
 	Now             func() time.Time // nil = clock.Real
+	// SessionValue mints the fp_session values (nil = random tokens). The
+	// harness passes cookie canaries, so make leakcheck hunts them too.
+	SessionValue func() string
 	// OnLoginPage runs synchronously while a login page (form or captcha)
 	// is served, before the response is written: the browser that asked
 	// for it is alive and waiting.
@@ -265,6 +268,25 @@ func (s *fakeSite) ResetLog() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.log = nil
+}
+
+// IssuedSessions returns every fp_session value the site minted.
+func (s *fakeSite) IssuedSessions() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.sessions))
+	for v := range s.sessions {
+		out = append(out, v)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// Outbox returns a copy of every email code the site sent.
+func (s *fakeSite) Outbox() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.outbox)
 }
 
 // TOTP returns the site's code for the step holding at.
@@ -595,6 +617,9 @@ func (s *fakeSite) ssoCallback(w http.ResponseWriter, r *http.Request) {
 
 func (s *fakeSite) newSession() string {
 	v := randomToken()
+	if s.opts.SessionValue != nil {
+		v = s.opts.SessionValue()
+	}
 	s.mu.Lock()
 	s.sessions[v] = &session{}
 	s.mu.Unlock()
