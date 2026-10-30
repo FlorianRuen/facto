@@ -102,6 +102,13 @@ offset  size  field
   `go tool nm` on the release binary shows the package's sentinel symbol (referenced at
   registration so the linker keeps it). Self-test: the same check run with `-tags e2e`
   must hit both, otherwise release-check fails (A3).
+  An e2e binary never consults the OS keyring (J1 T23): without a test seam its key
+  backend is the file source over `<state_dir>/e2e-keys` (0700, created on first use),
+  derived from the state dir rather than a variable, so every e2e run (always on a
+  sandboxed state dir) keeps its keys with it and cannot reach the developer's keyring or
+  session bus. The same holds for `keyring://` credential references: in an e2e build the
+  keyring scheme is served from that file store (no state dir known: every call refused),
+  never from the Secret Service, Keychain or Credential Manager.
 - **No keyring in production** (backend unavailable or unsupported, as opposed to "entry
   not found"): the run uses ephemeral sessions for every connector and logs **one**
   warning naming the cause. This fallback never deletes or writes anything, neither in

@@ -262,9 +262,9 @@ func openSessions(ctx context.Context, e env, cfg *config.Config, log *slog.Logg
 	opts := vault.Options{StateDir: cfg.StateDir, Mode: mode, Rand: rand.Reader, Log: log}
 	switch {
 	case mode == vault.Persistent:
-		opts.Keyring, opts.KeyringErr = probeKeyBackend(ctx, e, interactive)
+		opts.Keyring, opts.KeyringErr = probeKeyBackend(ctx, e, cfg.StateDir, interactive)
 	case hasSessionFiles(cfg.StateDir):
-		opts.Keyring, opts.KeyringErr = probeKeyBackend(ctx, e, interactive)
+		opts.Keyring, opts.KeyringErr = probeKeyBackend(ctx, e, cfg.StateDir, interactive)
 		if opts.KeyringErr != nil {
 			log.WarnContext(ctx, "vault: keyring unavailable, keys of removed sessions not deleted", "cause", opts.KeyringErr.Error())
 		}
@@ -302,10 +302,22 @@ func hasSessionFiles(stateDir string) bool {
 	})
 }
 
-// probeKeyBackend calls e.KeyBackend (or defaultKeyBackend), bounded by
-// keyringProbeTimeout when the run is not interactive.
-func probeKeyBackend(ctx context.Context, e env, interactive bool) (vault.KeyBackend, error) {
+// testKeyBackend is nil in every build but -tags e2e, where an e2e-only
+// file of this package sets it at package initialization: the e2e build
+// keeps session keys in files under the state dir and never consults the
+// OS keyring (ADR 0009 A3). A release build has no other key source.
+var testKeyBackend func(ctx context.Context, e env, stateDir string) (vault.KeyBackend, error)
+
+// probeKeyBackend calls e.KeyBackend (or testKeyBackend in an e2e build,
+// or defaultKeyBackend), bounded by keyringProbeTimeout when the run is not
+// interactive. stateDir is the configured state dir (it must exist).
+func probeKeyBackend(ctx context.Context, e env, stateDir string, interactive bool) (vault.KeyBackend, error) {
 	keyBackend := e.KeyBackend
+	if keyBackend == nil && testKeyBackend != nil {
+		keyBackend = func(ctx context.Context, e env) (vault.KeyBackend, error) {
+			return testKeyBackend(ctx, e, stateDir)
+		}
+	}
 	if keyBackend == nil {
 		keyBackend = defaultKeyBackend
 	}

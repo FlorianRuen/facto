@@ -33,9 +33,29 @@ type secretResolver interface {
 // release builds).
 var testSecretProviders func(e env) ([]secret.Provider, error)
 
-// newSecretResolver is secret.NewResolver(secretProviders(e)...).
-func newSecretResolver(_ context.Context, e env, _ *config.Config) (secretResolver, error) {
-	ps, err := secretProviders(e)
+// testKeyringBackend is nil in every build but -tags e2e, where
+// keyring_e2e.go sets it at package initialization: keyring:// refs are
+// then served from the e2e file key store under the state dir, never the
+// OS keyring (ADR 0009 A3).
+var testKeyringBackend func(e env, stateDir string) keyring.Backend
+
+// keyringBackend returns the backend of the keyring:// scheme: the e2e
+// file store in an e2e build, the OS keyring otherwise. Nothing is called.
+func keyringBackend(e env, stateDir string) keyring.Backend {
+	if testKeyringBackend != nil {
+		return testKeyringBackend(e, stateDir)
+	}
+	return keyring.System()
+}
+
+// newSecretResolver is secret.NewResolver over secretProvidersIn(e, the
+// configured state dir).
+func newSecretResolver(_ context.Context, e env, cfg *config.Config) (secretResolver, error) {
+	stateDir := ""
+	if cfg != nil {
+		stateDir = cfg.StateDir
+	}
+	ps, err := secretProvidersIn(e, stateDir)
 	if err != nil {
 		return nil, err
 	}
@@ -50,8 +70,15 @@ func newSecretResolver(_ context.Context, e env, _ *config.Config) (secretResolv
 // secretProviders returns the production providers: bw (over the bw CLI,
 // reusing a session key the user unlocked in this terminal) and keyring (the
 // OS keyring), plus the e2e file provider in builds with -tags e2e only.
-// Constructing them runs nothing: no bw command, no keyring call.
+// Constructing them runs nothing: no bw command, no keyring call. No state
+// dir is known here: in an e2e build keyring:// refs are refused.
 func secretProviders(e env) ([]secret.Provider, error) {
+	return secretProvidersIn(e, "")
+}
+
+// secretProvidersIn is secretProviders with the configured state dir, where
+// an e2e build keeps its keyring:// entries.
+func secretProvidersIn(e env, stateDir string) ([]secret.Provider, error) {
 	var session secret.Secret
 	if e.LookupEnv != nil {
 		if v, ok := e.LookupEnv(bwSessionEnv); ok && v != "" {
@@ -63,7 +90,7 @@ func secretProviders(e env) ([]secret.Provider, error) {
 		session.Wipe()
 		return nil, fmt.Errorf("bitwarden provider: %w", err)
 	}
-	ps := []secret.Provider{bw, keyring.New(keyring.System())}
+	ps := []secret.Provider{bw, keyring.New(keyringBackend(e, stateDir))}
 	if testSecretProviders != nil {
 		extra, err := testSecretProviders(e)
 		if err != nil {
