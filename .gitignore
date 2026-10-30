@@ -8,3 +8,6 @@ dist/
 /internal/lintselftest_cdptest/
 /internal/browser/zz_lintselftest_cdp.go
 /internal/httpx/zz_lintselftest_cdp.go
+/internal/lintselftest_pinned/
+/internal/lintselftest_pinnedtest/
+/internal/browser/cft/zz_lintselftest_pinned.go

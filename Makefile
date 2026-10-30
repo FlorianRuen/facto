@@ -1,7 +1,7 @@
 # Single entry points for humans, agents and CI. Keep targets stable: GOALS.md depends on them.
 GO        ?= go
 PKGS      := ./...
-COVER_GATES := internal/normalize:85 internal/store:85 internal/secret:85 internal/vault:85 internal/fsx:85 internal/httpx:85 internal/browser:85
+COVER_GATES := internal/normalize:85 internal/store:85 internal/secret:85 internal/vault:85 internal/fsx:85 internal/httpx:85 internal/browser/cft:85 internal/browser:85
 export FACTO_CANARY := 1
 # go test runs in each package directory: export absolute paths.
 export CANARY_FILE := $(CURDIR)/.cache/canaries.txt

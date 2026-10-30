@@ -23,7 +23,16 @@
 #      (f) internal/lintselftest_cdp/ (.go file)      -> non-zero, depguard names cdploopback
 #      (g) internal/lintselftest_cdptest/ (_test.go)  -> non-zero, depguard names cdploopback
 #
-# Prints "lint-selftest: openpgp import rejected by depguard" and
+# 3. Forbidigo rule on httpx.NewPinned (ADR 0008 "Chrome for Testing (A10)",
+#    J1 T11): only internal/browser/cft may call it. Same in-tree fixture
+#    pattern (EXIT trap, .gitignore):
+#      (h) internal/browser/cft/zz_lintselftest_pinned.go -> must exit 0
+#      (i) internal/lintselftest_pinned/ (.go file)       -> non-zero, forbidigo names httpx.NewPinned
+#      (j) internal/lintselftest_pinnedtest/ (_test.go)   -> non-zero, forbidigo names httpx.NewPinned
+#
+# Prints "lint-selftest: openpgp import rejected by depguard",
+# "lint-selftest: httpx.NewPinned outside internal/browser/cft rejected by
+# forbidigo" and
 # "lint-selftest: cdploopback import outside internal/browser rejected by
 # depguard" and exits 0 on success; exits 1 with the offending linter output
 # otherwise.
@@ -40,10 +49,14 @@ CDP_PROD="$ROOT/internal/lintselftest_cdp"
 CDP_TEST="$ROOT/internal/lintselftest_cdptest"
 CDP_CONTROL="$ROOT/internal/browser/zz_lintselftest_cdp.go"
 CDP_HTTPX="$ROOT/internal/httpx/zz_lintselftest_cdp.go"
+HTTPX=github.com/FlorianRuen/facto/internal/httpx
+PIN_PROD="$ROOT/internal/lintselftest_pinned"
+PIN_TEST="$ROOT/internal/lintselftest_pinnedtest"
+PIN_CONTROL="$ROOT/internal/browser/cft/zz_lintselftest_pinned.go"
 
 cleanup() {
-  rm -rf "$CDP_PROD" "$CDP_TEST"
-  rm -f "$CDP_CONTROL" "$CDP_HTTPX"
+  rm -rf "$CDP_PROD" "$CDP_TEST" "$PIN_PROD" "$PIN_TEST"
+  rm -f "$CDP_CONTROL" "$CDP_HTTPX" "$PIN_CONTROL"
 }
 
 fail() {
@@ -52,7 +65,7 @@ fail() {
 }
 
 cd "$ROOT"
-for p in "$CDP_PROD" "$CDP_TEST" "$CDP_CONTROL" "$CDP_HTTPX"; do
+for p in "$CDP_PROD" "$CDP_TEST" "$CDP_CONTROL" "$CDP_HTTPX" "$PIN_PROD" "$PIN_TEST" "$PIN_CONTROL"; do
   [[ ! -e $p ]] || fail "$p already exists: refusing to overwrite it"
 done
 trap cleanup EXIT
@@ -176,6 +189,54 @@ import "$CDP"
 var LintSelftestParse = cdploopback.ParseTarget
 EOF
 
+mkdir -p -m 700 "$PIN_PROD" "$PIN_TEST"
+cat >"$PIN_PROD/prod.go" <<EOF
+// Package lintselftestpinned calls httpx.NewPinned from outside
+// internal/browser/cft.
+package lintselftestpinned
+
+import "$HTTPX"
+
+// NewPinned is a reference to the restricted constructor.
+var NewPinned = httpx.NewPinned
+EOF
+
+cat >"$PIN_TEST/testonly.go" <<'EOF'
+// Package lintselftestpinnedtest calls httpx.NewPinned from a test file only.
+package lintselftestpinnedtest
+
+// Answer returns a constant.
+func Answer() int { return 42 }
+EOF
+cat >"$PIN_TEST/testonly_test.go" <<EOF
+package lintselftestpinnedtest
+
+import (
+	"testing"
+
+	"$HTTPX"
+)
+
+var newPinned = httpx.NewPinned
+
+func TestRestricted(t *testing.T) {
+	t.Parallel()
+	if newPinned != nil && Answer() != 42 {
+		t.Fatal("unreachable")
+	}
+}
+EOF
+
+cat >"$PIN_CONTROL" <<EOF
+package cft
+
+import "$HTTPX"
+
+// LintSelftestNewPinned references the restricted constructor from its one
+// allowed caller.
+var LintSelftestNewPinned = httpx.NewPinned
+EOF
+
 # Module cache only: nothing is fetched.
 export GOPROXY=off GOFLAGS=-mod=mod GOWORK=off
 
@@ -189,14 +250,15 @@ lint() {
 out=$(lint "$WORK" ./control/...) || fail "control package must lint clean:
 $out"
 
-# expect_rejected NAME DIR PKG BANNED: linting PKG from DIR must exit non-zero
-# with a depguard finding naming BANNED on the same line.
+# expect_rejected NAME DIR PKG BANNED [LINTER]: linting PKG from DIR must
+# exit non-zero with a LINTER (default depguard) finding naming BANNED on the
+# same line.
 expect_rejected() {
-  local name=$1 dir=$2 pkg=$3 banned=$4 out status=0
+  local name=$1 dir=$2 pkg=$3 banned=$4 linter=${5:-depguard} out status=0
   out=$(lint "$dir" "$pkg") || status=$?
-  [[ $status -ne 0 ]] || fail "$name: lint exited 0 although it imports $banned"
-  if ! grep -F "$banned" <<<"$out" | grep -qF depguard; then
-    fail "$name: no depguard finding naming $banned (exit $status):
+  [[ $status -ne 0 ]] || fail "$name: lint exited 0 although it uses $banned"
+  if ! grep -F "$banned" <<<"$out" | grep -qF "$linter"; then
+    fail "$name: no $linter finding naming $banned (exit $status):
 $out"
   fi
 }
@@ -213,3 +275,10 @@ expect_rejected "cdploopback production file" "$ROOT" ./internal/lintselftest_cd
 expect_rejected "cdploopback test file" "$ROOT" ./internal/lintselftest_cdptest/... "$CDP"
 
 echo "lint-selftest: cdploopback import outside internal/browser rejected by depguard"
+
+out=$(lint "$ROOT" ./internal/browser/cft/...) || fail "internal/browser/cft calling httpx.NewPinned must lint clean:
+$out"
+expect_rejected "NewPinned production file" "$ROOT" ./internal/lintselftest_pinned/... httpx.NewPinned forbidigo
+expect_rejected "NewPinned test file" "$ROOT" ./internal/lintselftest_pinnedtest/... httpx.NewPinned forbidigo
+
+echo "lint-selftest: httpx.NewPinned outside internal/browser/cft rejected by forbidigo"

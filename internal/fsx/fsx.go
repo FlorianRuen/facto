@@ -25,6 +25,8 @@ import (
 const (
 	filePerm = 0o600
 	dirPerm  = 0o700
+	// execPerm is the mode of WriteAtomicExec files: owner only.
+	execPerm = 0o700
 	// tempPrefix marks in-flight WriteAtomic temp files. The random suffix
 	// (crypto/rand) makes concurrent writers on the same name independent.
 	tempPrefix = ".fsx-tmp-"
@@ -102,7 +104,7 @@ func cleanName(name string) (string, error) {
 // failed, the error wraps ErrNotDurable: name already holds the new content.
 // The parent directory must exist: otherwise the error wraps fs.ErrNotExist.
 func (r *Root) WriteAtomic(ctx context.Context, name string, data []byte) error {
-	return r.writeAtomic(ctx, name, func(w io.Writer) error {
+	return r.writeAtomic(ctx, name, filePerm, func(w io.Writer) error {
 		if _, err := w.Write(data); err != nil {
 			return fmt.Errorf("write: %w", err)
 		}
@@ -114,9 +116,56 @@ func (r *Root) WriteAtomic(ctx context.Context, name string, data []byte) error 
 // error from the reader is wrapped (errors.Is works on it). The context is
 // checked between reads.
 func (r *Root) WriteAtomicFrom(ctx context.Context, name string, src io.Reader) error {
-	return r.writeAtomic(ctx, name, func(w io.Writer) error {
+	return r.writeAtomic(ctx, name, filePerm, func(w io.Writer) error {
 		return copyCtx(ctx, w, src)
 	}, r.rename)
+}
+
+// WriteAtomicExec is WriteAtomicFrom for executables: same temp file in the
+// same directory, fsync, close, rename, but the final file mode is exactly
+// 0700 whatever the umask or the mode of a replaced file (never setuid,
+// setgid, sticky, group or world bits). It replaces an existing regular
+// file. It refuses, with nothing changed, when name already exists as a
+// symlink (dangling or not, never followed) or as anything other than a
+// regular file (directory, FIFO...). On any error the previous content of
+// name is untouched and no temp file is left behind. Invalid names wrap
+// ErrInvalidName; a missing parent wraps fs.ErrNotExist; a canceled ctx
+// wraps ctx.Err().
+//
+// The refusal is checked before streaming and again just before the
+// rename. A symlink swapped in after that last check is replaced by the
+// rename, never followed: rename does not resolve its target.
+func (r *Root) WriteAtomicExec(ctx context.Context, name string, src io.Reader) error {
+	osName, err := cleanName(name)
+	if err != nil {
+		return err
+	}
+	if err := r.refuseNonRegular(osName); err != nil {
+		return fmt.Errorf("fsx write exec %q: %w", name, err)
+	}
+	return r.writeAtomic(ctx, name, execPerm, func(w io.Writer) error {
+		return copyCtx(ctx, w, src)
+	}, func(tmp, osName string) error {
+		if err := r.refuseNonRegular(osName); err != nil {
+			return err
+		}
+		return r.rename(tmp, osName)
+	})
+}
+
+// refuseNonRegular returns nil when osName is missing or a regular file,
+// and an error otherwise (symlink, directory, FIFO, device, socket).
+func (r *Root) refuseNonRegular(osName string) error {
+	fi, err := r.root.Lstat(osName)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
+		return fmt.Errorf("lstat: %w", err)
+	case !fi.Mode().IsRegular():
+		return fmt.Errorf("%w: existing %v", ErrNotRegular, fi.Mode().Type())
+	}
+	return nil
 }
 
 // WriteNew is WriteAtomicFrom that never replaces anything: the fsynced temp
@@ -144,7 +193,7 @@ func (r *Root) WriteNew(ctx context.Context, name string, src io.Reader) error {
 	if _, err := r.root.Lstat(osName); err == nil {
 		return fmt.Errorf("fsx write new %q: %w", name, fs.ErrExist)
 	}
-	return r.writeAtomic(ctx, name, func(w io.Writer) error {
+	return r.writeAtomic(ctx, name, filePerm, func(w io.Writer) error {
 		return copyCtx(ctx, w, src)
 	}, r.link)
 }
@@ -253,7 +302,8 @@ func copyCtx(ctx context.Context, w io.Writer, src io.Reader) error {
 
 // writeAtomic writes a temp file next to name with fill, fsyncs it, then
 // hands it to publish (rename or link) and fsyncs the parent directory.
-func (r *Root) writeAtomic(ctx context.Context, name string, fill func(io.Writer) error, publish func(tmp, osName string) error) (err error) {
+// The temp file, so the published file, gets exactly perm.
+func (r *Root) writeAtomic(ctx context.Context, name string, perm fs.FileMode, fill func(io.Writer) error, publish func(tmp, osName string) error) (err error) {
 	osName, err := cleanName(name)
 	if err != nil {
 		return err
@@ -280,8 +330,8 @@ func (r *Root) writeAtomic(ctx context.Context, name string, fill func(io.Writer
 		}
 	}()
 
-	// The umask may have narrowed the mode; force exactly 0600.
-	if err := f.Chmod(filePerm); err != nil {
+	// The umask may have narrowed the mode; force exactly perm.
+	if err := f.Chmod(perm); err != nil {
 		return fmt.Errorf("fsx write %q: chmod temp: %w", name, err)
 	}
 	if err := fill(f); err != nil {

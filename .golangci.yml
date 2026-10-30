@@ -38,6 +38,15 @@ linters:
           msg: "fs mutation outside internal/fsx: use internal/fsx"
         - pattern: '^time\.Now$'
           msg: "inject clock.Clock"
+        # ADR 0008 "Chrome for Testing (A10)", J1 T11: the exact-host,
+        # path-prefix client exists for the Chrome for Testing download from
+        # shared storage, which ParseAllowlist refuses on purpose. Only
+        # internal/browser/cft may call it (internal/httpx is excluded from
+        # forbidigo as a whole). Backed by internal/httpx/pinned_callers_test.go
+        # (renamed and dot imports, build-tagged files). Proven live by make
+        # lint-selftest.
+        - pattern: '^httpx\.NewPinned$'
+          msg: "httpx.NewPinned is reserved to internal/browser/cft (ADR 0008, Chrome for Testing download)"
     depguard:
       rules:
         main:
@@ -103,6 +112,9 @@ linters:
     rules:
       - path: '^(internal/fsx/|internal/httpx/|internal/clock/)'
         linters: [forbidigo]
+      - path: '^internal/browser/cft/'
+        linters: [forbidigo]
+        text: 'httpx.NewPinned is reserved'
       # cmd/ is the CLI: it prints to stdout/stderr. Every other forbidigo
       # rule (httpx, fsx, clock) applies to it (SEC-J0-15, SEC-J0-16).
       - path: '^cmd/'
