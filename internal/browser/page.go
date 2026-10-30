@@ -345,7 +345,9 @@ func (p *Page) checkURL(raw string) error {
 	case strings.Contains(u.Host, "%"):
 		return fmt.Errorf("%w: escaped host", ErrURLRefused)
 	}
-	if port := u.Port(); port != "" && port != defaultHTTPSPort {
+	// "host:" has an empty Port(): refused like httpx does, never read as
+	// the default port.
+	if port := u.Port(); (port != "" && port != defaultHTTPSPort) || strings.HasSuffix(u.Host, ":") {
 		return fmt.Errorf("%w: port other than 443", ErrURLRefused)
 	}
 	host := u.Hostname()
