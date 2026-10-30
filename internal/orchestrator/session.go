@@ -35,6 +35,8 @@ const (
 	noteSessionNotSaved = "session not saved: the next run logs in again"
 	noteLoginPrefix     = "login required: run `facto login "
 	noteLoginSuffix     = "`"
+	noteConfigPrefix    = "credentials rejected: run `facto config "
+	noteConfigSuffix    = "`"
 )
 
 // errLoginOnly reports a browser launch outside Login.
@@ -112,6 +114,12 @@ func (o *Orchestrator) rejected(ctx context.Context, cr *connRun, id string, res
 // connector id (connector.ValidateInfo).
 func loginNote(id string) string {
 	return noteLoginPrefix + id + noteLoginSuffix
+}
+
+// configNote is the fixed note of an auth_failed connector. id is a valid
+// connector id (connector.ValidateInfo).
+func configNote(id string) string {
+	return noteConfigPrefix + id + noteConfigSuffix
 }
 
 // loginBrowser is the connector.BrowserPool handed to a connector's Login.

@@ -98,7 +98,9 @@ var errNilSource = errors.New("orchestrator: nil connector source")
 // and the note "session not saved", never a connector failure). When a
 // restored session makes Login or List fail with ErrNeedsLogin or
 // ErrAuthFailed, it is Deleted and the state is needs_login. Every
-// needs_login result notes `facto login <id>`.
+// needs_login result notes `facto login <id>`; every auth_failed result (the
+// credentials, not a restored session, were rejected) notes
+// `facto config <id>`.
 //
 // Login and List errors end the connector with the state of the sentinel
 // they wrap (errors.Is), anything else broken. A Fetch error wrapping a
@@ -467,12 +469,18 @@ func (o *Orchestrator) stepFailed(ctx context.Context, cr *connRun, rejected boo
 	o.fail(ctx, cr, st, err)
 }
 
-// fail sets the connector state and logs it through the redacting logger.
-// The error text never reaches the result.
+// fail sets the connector state, adds the fixed note of needs_login
+// (`facto login <id>`) or auth_failed (`facto config <id>`), and logs it
+// through the redacting logger. The error text never reaches the result.
 func (o *Orchestrator) fail(ctx context.Context, cr *connRun, st State, err error) {
 	cr.res.State = st
-	if st == StateNeedsLogin {
+	switch st {
+	case StateNeedsLogin:
 		cr.res.Notes = append(cr.res.Notes, loginNote(cr.res.ID))
+	case StateAuthFailed:
+		cr.res.Notes = append(cr.res.Notes, configNote(cr.res.ID))
+	case StateOK, StateBroken, StateRateLimited, StateInterrupted:
+		// No fixed hint: the report state says it all.
 	}
 	level := slog.LevelWarn
 	if st == StateBroken {
