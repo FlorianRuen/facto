@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 
+	"github.com/FlorianRuen/facto/internal/connector"
 	"github.com/FlorianRuen/facto/internal/dest"
 	"github.com/FlorianRuen/facto/internal/inbox"
 	"github.com/FlorianRuen/facto/internal/logx"
@@ -64,6 +65,9 @@ type Deps struct {
 	Log     *slog.Logger // nil = discard; New always wraps its handler in logx.NewHandler
 	MaxSize int64        // <= 0 = DefaultMaxSize
 	NewHTTP HTTPFactory  // client per connector; nil = httpx.New(allowed, httpx.Options{})
+	// Secrets is copied into every connector.Env; nil = none. The
+	// orchestrator never closes it: its owner (the CLI) does.
+	Secrets connector.SecretResolver
 }
 
 // Orchestrator files documents. It is safe for sequential use; the pipeline
@@ -75,6 +79,7 @@ type Orchestrator struct {
 	log     *slog.Logger
 	maxSize int64
 	newHTTP HTTPFactory
+	secrets connector.SecretResolver
 }
 
 // New validates d and returns an Orchestrator. A missing Index, Dest or
@@ -108,5 +113,6 @@ func New(d Deps) (*Orchestrator, error) {
 		namer:   d.Namer,
 		log:     slog.New(logx.NewHandler(inner, logx.Options{})),
 		maxSize: maxSize,
+		secrets: d.Secrets,
 	}, nil
 }

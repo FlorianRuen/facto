@@ -74,7 +74,8 @@ var errNilSource = errors.New("orchestrator: nil connector source")
 // Run collects p from every connector of src.All(), sequentially, in that
 // order. Per connector: connector.ValidateInfo (failure: broken, never
 // logged in); Env{HTTP: Deps.NewHTTP(Info.AllowedDomains) (error: broken,
-// never logged in), Log: the redacting logger tagged connector=<id>}; Login;
+// never logged in), Log: the redacting logger tagged connector=<id>,
+// Secrets: Deps.Secrets}; Login;
 // List(session, p); then for each listed ref: a ProviderID validProviderID
 // refuses (a URL, a query, a token, whitespace or control characters, over
 // 128 bytes) is StatusInvalid, with no ProviderID, never fetched, indexed,
@@ -222,7 +223,7 @@ func (o *Orchestrator) runSteps(ctx context.Context, c connector.Connector, p co
 		o.fail(ctx, cr, StateBroken, err)
 		return
 	}
-	env := connector.Env{HTTP: client, Log: cr.log}
+	env := connector.Env{HTTP: client, Log: cr.log, Secrets: o.secrets}
 
 	cr.phase = phaseLogin
 	sess, err := c.Login(ctx, env)

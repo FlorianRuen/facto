@@ -21,6 +21,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/FlorianRuen/facto/internal/clock"
+	"github.com/FlorianRuen/facto/internal/config"
 	"github.com/FlorianRuen/facto/internal/logx"
 	"github.com/FlorianRuen/facto/internal/orchestrator"
 	"github.com/FlorianRuen/facto/internal/proc"
@@ -39,6 +40,9 @@ type env struct {
 	Clock clock.Clock
 	// LookupEnv reads one environment variable (os.LookupEnv in production).
 	LookupEnv func(string) (string, bool)
+	// NewSecrets builds the run's secret resolver; nil means
+	// newSecretResolver. Test seam.
+	NewSecrets func(ctx context.Context, e env, cfg *config.Config) (secretResolver, error)
 }
 
 func main() {

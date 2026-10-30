@@ -10,7 +10,7 @@ export ART_DIR := $(CURDIR)/.cache/test-artifacts
 # lint-selftest creates in-tree fixtures that race/lint must not see: never run targets in parallel.
 .NOTPARALLEL:
 
-.PHONY: verify fmt-check lint lint-selftest test race cover e2e leakcheck audit score-check tools lint-actions release-check
+.PHONY: verify fmt-check lint lint-selftest test race cover e2e e2e-unit leakcheck audit score-check tools lint-actions release-check release-e2e-check
 
 # goreleaser runs from its pinned image (ADR 0001) so its dependencies stay out
 # of tools/go.mod and the osv-scanner scope.
@@ -23,7 +23,7 @@ GORELEASER_RUN := -e HOME=/tmp -e GOFLAGS=-mod=readonly -e GOTOOLCHAIN=go$(shell
 	-e GOPROXY=file:///hostmod/cache/download -e GOSUMDB=off -e GOMODCACHE=/tmp/gomod \
 	-v $(shell $(GO) env GOMODCACHE):/hostmod:ro -v $(CURDIR):/src:ro
 
-verify: fmt-check lint lint-selftest race cover leakcheck ## everything required before a commit
+verify: fmt-check lint lint-selftest race cover e2e-unit release-e2e-check leakcheck ## everything required before a commit
 	@echo "verify: ok"
 
 fmt-check:
@@ -55,6 +55,13 @@ release-check:
 		git remote set-url origin https://github.com/FlorianRuen/facto.git && \
 		goreleaser check && goreleaser release --snapshot --clean --skip=sign,sbom,publish'
 
+# Proves the release build has no e2e-only code (ADR 0009 A3, J1 T17): with
+# the exact .goreleaser.yaml flags, go list -deps finds no e2e-only package
+# or e2e-tagged file and go tool nm no e2e symbol; the same check on a
+# -tags e2e build must hit. Separate from release-check (goreleaser snapshot).
+release-e2e-check:
+	@$(GO) run ./scripts/release-e2e-check
+
 test:
 	$(GO) test -short -count=1 $(PKGS)
 
@@ -65,6 +72,17 @@ race:
 	mkdir -p "$(ART_DIR)"
 	install -m 600 /dev/null "$(CANARY_FILE)"
 	$(GO) test -race -count=1 -coverprofile=.cache/coverage.out $(PKGS)
+
+# Unit tests of the e2e build, in every package holding a Go file whose
+# //go:build line mentions the e2e tag (test files included), computed from
+# the tree. test/e2e is excluded: it needs the Vaultwarden container and
+# runs in make e2e.
+E2E_UNIT_PKGS = $(shell git ls-files --cached --others --exclude-standard '*.go' | \
+	xargs grep -lE '^//go:build .*\<e2e\>' | xargs -n1 dirname | sort -u | \
+	grep -vx 'test/e2e' | sed 's|^|./|')
+
+e2e-unit:
+	$(GO) test -race -count=1 -tags e2e $(E2E_UNIT_PKGS)
 
 cover: race
 	./scripts/check-coverage.sh .cache/coverage.out "$(COVER_GATES)" 70

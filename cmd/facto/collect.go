@@ -117,18 +117,36 @@ func collect(ctx context.Context, e env, p collectParams) error {
 		return configError(fmt.Errorf("naming: %w", err))
 	}
 
+	// Built once per run, after every configuration check and before any
+	// folder is created; closed (password manager locked) on every path
+	// below, once the connectors and the inbox are done.
+	newSecrets := e.NewSecrets
+	if newSecrets == nil {
+		newSecrets = newSecretResolver
+	}
+	secrets, err := newSecrets(ctx, e, cfg)
+	if err != nil {
+		return &exitError{code: orchestrator.ExitAttention, err: fmt.Errorf("secrets: %w", err)}
+	}
+
 	log := slog.New(logx.NewHandler(slog.NewTextHandler(p.stderr, &slog.HandlerOptions{Level: slog.LevelWarn}), logx.Options{}))
 	if cfg.Output.GDrive.Enabled {
 		log.WarnContext(ctx, "output.gdrive is not available in this version: documents are filed locally only")
 	}
 
 	report := orchestrator.Report{StartedAt: e.Clock.Now()}
-	stateReady, runErr := collectInto(ctx, e, cfg, collectDeps{reg: reg, namer: namer, log: log}, p, &report)
+	stateReady, runErr := collectInto(ctx, e, cfg, collectDeps{reg: reg, namer: namer, log: log, secrets: secrets}, p, &report)
+	closeSecretsErr := closeErr("secrets", secrets.CloseAll())
 	report.FinishedAt = e.Clock.Now()
 
 	code := orchestrator.ExitCode(report, runErr)
 	if runErr != nil {
 		writeErr(p.stderr, runErr)
+	}
+	if closeSecretsErr != nil {
+		// A password manager that may still be unlocked needs attention.
+		writeErr(p.stderr, closeSecretsErr)
+		code = max(code, orchestrator.ExitAttention)
 	}
 	// The report of a canceled run is still written: it tells the user which
 	// connector was interrupted. It needs the state dir, which opening the
@@ -155,6 +173,9 @@ type collectDeps struct {
 	reg   *connector.Registry
 	namer *normalize.Namer
 	log   *slog.Logger
+	// secrets is handed to every connector (orchestrator.Deps.Secrets);
+	// collect owns and closes it.
+	secrets connector.SecretResolver
 }
 
 // collectInto opens the output folder, the index and the inbox, then fills
@@ -189,7 +210,7 @@ func collectInto(ctx context.Context, e env, cfg *config.Config, d collectDeps, 
 	}
 	defer func() { err = errors.Join(err, closeErr("output folder", dst.Close())) }()
 
-	orch, err := orchestrator.New(orchestrator.Deps{Index: idx, Dest: dst, Namer: d.namer, Log: d.log})
+	orch, err := orchestrator.New(orchestrator.Deps{Index: idx, Dest: dst, Namer: d.namer, Log: d.log, Secrets: d.secrets})
 	if err != nil {
 		return true, fmt.Errorf("orchestrator: %w", err)
 	}

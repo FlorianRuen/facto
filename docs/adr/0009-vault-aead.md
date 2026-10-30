@@ -96,7 +96,8 @@ offset  size  field
 - **e2e only:** a file key source in its own package `internal/vault/e2ekey` (key file
   0600 in a 0700 test directory via `internal/fsx`). It is registered only through a
   blank import in a `//go:build e2e` file; no config value or other runtime string can
-  select it. `make release-check` (T17, run by `make verify`) fails if either check hits:
+  select it. `make release-e2e-check` (T17, run by `make verify`; separate from the goreleaser
+  `make release-check`) fails if either check hits:
   `go list -deps` with the release build flags lists `internal/vault/e2ekey`, or
   `go tool nm` on the release binary shows the package's sentinel symbol (referenced at
   registration so the linker keeps it). Self-test: the same check run with `-tags e2e`
