@@ -17,3 +17,4 @@
 --no-proxy-server
 --remote-debugging-port=0
 --user-data-dir=C:\facto-test\profile
+--webrtc-ip-handling-policy=disable_non_proxied_udp

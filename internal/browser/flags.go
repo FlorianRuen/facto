@@ -52,7 +52,15 @@ func resolveGOOS(goos string) (string, error) {
 }
 
 // baseFlags are passed on every OS. Each one turns off a feature that would
-// talk to Google, store data or offer to save a password.
+// talk to Google, store data or offer to save a password, or closes a
+// channel the in-browser allowlist cannot see.
+//
+// WebRTC (ADR 0008 "Hardening / WebRTC", J1 T27): Chrome for Testing 156
+// no longer knows --force-webrtc-ip-handling-policy (kept for older
+// builds and the release checks); the policy reaches Chrome through
+// --webrtc-ip-handling-policy, which sets the webrtc.ip_handling_policy
+// pref. With disable_non_proxied_udp and no proxy, ICE gathers no UDP
+// candidate and contacts no STUN or TURN server.
 var baseFlags = []string{
 	"--disable-background-networking",
 	"--disable-breakpad",
@@ -68,6 +76,7 @@ var baseFlags = []string{
 	"--no-default-browser-check",
 	"--no-first-run",
 	"--no-pings",
+	"--webrtc-ip-handling-policy=disable_non_proxied_udp",
 }
 
 // Flags returns Chrome's argv (without the executable, without a URL). The

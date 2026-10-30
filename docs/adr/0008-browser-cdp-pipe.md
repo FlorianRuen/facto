@@ -318,11 +318,41 @@ the pipe (the io-pipes route below bypasses this):
     every pin bump (`make e2e`).
   - second layer, release builds too, derived from the same allowlist:
     `--host-resolver-rules="MAP * ~NOTFOUND, EXCLUDE <allowlist>"`,
-    `--force-webrtc-ip-handling-policy=disable_non_proxied_udp`, `--dns-prefetch-disable`;
+    `--webrtc-ip-handling-policy=disable_non_proxied_udp` (see "WebRTC" below; the legacy
+    `--force-webrtc-ip-handling-policy=disable_non_proxied_udp` stays too),
+    `--dns-prefetch-disable`;
   - host matching is the same code as `internal/httpx`; it fails closed on an
     unparsable URL, userinfo, a non-https scheme or an IP literal.
   - Only the e2e build may map hosts to loopback. The release check forbids the loopback
     mapping and the test CA flags, not the `--host-resolver-rules` flag name.
+- **WebRTC (J1 T27, red-team finding HIGH).** ICE traffic (STUN, TURN over UDP or TCP)
+  goes straight to an IP and port the page names: neither `Fetch` nor the resolver rules
+  see it, and the TURN `USERNAME` is page-chosen, a channel for anything the page can
+  read (the credential facto just typed). Chrome for Testing 156.0.8078.80 does not know
+  `--force-webrtc-ip-handling-policy` any more (the string is absent from the binary), so
+  the J1 T6 switch was a no-op: STUN binding and TURN Allocate requests reached
+  127.0.0.1 (6 of 13 datagrams carried the canary `USERNAME`). The policy now reaches
+  Chrome through `--webrtc-ip-handling-policy=disable_non_proxied_udp`, read into the
+  `webrtc.ip_handling_policy` pref by Chrome's command-line pref store; with
+  `--no-proxy-server` ICE then gathers no UDP candidate and contacts no STUN or TURN
+  server. It is in `Flags` on every OS, in the `CheckFlags` allow-list with that value only,
+  and mandatory (`mandatorySwitches`); the legacy switch is kept because the release
+  checks and older builds expect it. Defence in depth: a constant script installed with
+  `Page.addScriptToEvaluateOnNewDocument` on the login page session before the first
+  navigation deletes `RTCPeerConnection`, `webkitRTCPeerConnection`, `RTCDataChannel` and
+  `RTCIceTransport` from the main world of every document of that target (main frame,
+  in-process frames, `about:blank` and `srcdoc` frames) before page scripts run. It is not
+  installed on auto-attached targets: on the pinned Chrome a `Page` call on a paused
+  cross-site frame target let the frame run and left `Runtime.runIfWaitingForDebugger`
+  unanswered, so cross-site frames and pop-up realms (`window.open` returns a fresh realm
+  to the opener) rely on the switch alone. Evidence (real Chrome, `make e2e`):
+  `TestAttack_ChromeWebRTCToIPLiteral` passes with the switch alone (script layer off)
+  and with the script alone (switch weakened to `default`);
+  `TestChrome_WebRTCBlockedInCrossSiteFrame` (STUN from a cross-site frame and a pop-up
+  realm) sees 0 datagrams with the switch and 6 with the switch weakened;
+  `TestChrome_NoWebRTCConstructorsInAnyDocument` checks the script layer. Residual: with
+  `FACTO_ALLOW_PROXY=1` WebRTC may use TCP through the user's own proxy. A Chrome bump
+  that renames the switch again is caught by the e2e tests, not by `make verify`.
 - **Secret typing.** Just before `TypeSecret` types, facto checks that
   `document.activeElement` is the expected input in the main frame, that focus is not in
   an iframe, and that the page origin is https and allowlisted. Otherwise it refuses.

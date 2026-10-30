@@ -18,3 +18,4 @@
 --remote-debugging-pipe
 --use-mock-keychain
 --user-data-dir=/facto-test/profile
+--webrtc-ip-handling-policy=disable_non_proxied_udp

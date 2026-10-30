@@ -177,7 +177,7 @@ var _ connector.Browser = (*Page)(nil)
 //  2. Browser.setDownloadBehavior deny for that context;
 //  3. Target.createTarget at about:blank in that context;
 //  4. Target.attachToTarget with flatten;
-//  5. page-session setup (Page.enable);
+//  5. page-session setup (Page.enable, the no-WebRTC script of webrtc.go);
 //  6. the in-browser allowlist (fetch.go): fail-closed subscriptions to
 //     Fetch.requestPaused and Target.attachedToTarget, Fetch.enable on
 //     every URL of the page session, then Target.setAutoAttach (paused
@@ -260,6 +260,9 @@ func (p *Page) setup(ctx context.Context) error {
 	p.sessionID = attached.SessionID
 	if err := p.call(ctx, p.sessionID, "Page.enable", nil, nil); err != nil {
 		return fmt.Errorf("new page: enable page domain: %w", err)
+	}
+	if err := p.installNoWebRTC(ctx, p.sessionID); err != nil {
+		return fmt.Errorf("new page: %w", err)
 	}
 	p.watch("", rootParent, false, true)
 	p.watch(p.sessionID, rootParent, true, true)

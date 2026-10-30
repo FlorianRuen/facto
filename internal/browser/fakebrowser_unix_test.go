@@ -259,9 +259,10 @@ func serveCDP() int {
 		case "Target.attachToTarget":
 			w = reply(map[string]any{"sessionId": "sess-pipe-1"})
 		// Fetch.enable and Target.setAutoAttach: NewPage's in-browser
-		// allowlist steps (T9).
+		// allowlist steps (T9); Page.addScriptToEvaluateOnNewDocument: the
+		// no-WebRTC script (T27).
 		case "Browser.setDownloadBehavior", "Page.enable", "Target.disposeBrowserContext",
-			"Fetch.enable", "Target.setAutoAttach":
+			"Fetch.enable", "Target.setAutoAttach", "Page.addScriptToEvaluateOnNewDocument":
 			w = reply(map[string]any{})
 		default:
 			w = frame(map[string]any{"id": req.ID, "error": map[string]any{"code": -32601, "message": "method not found"}})

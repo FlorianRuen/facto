@@ -60,6 +60,7 @@ var knownSwitches = map[string]string{
 	"remote-debugging-port":           goosWindows,
 	"password-store":                  goosLinux,
 	"use-mock-keychain":               goosDarwin,
+	"webrtc-ip-handling-policy":       "",
 }
 
 // CheckFlags is the release check run at launch over the final argv.
@@ -103,8 +104,9 @@ func CheckFlags(goos string, args []string) error {
 }
 
 // mandatorySwitches are the switches every release argv carries on goos:
-// the disposable profile, the resolver allowlist, the WebRTC and DNS
-// prefetch leaks closed, the CDP transport (pipe, or the port-0 fallback on
+// the disposable profile, the resolver allowlist, the WebRTC (both the
+// legacy and the current policy switch, ADR 0008 "Hardening / WebRTC") and
+// DNS prefetch leaks closed, the CDP transport (pipe, or the port-0 fallback on
 // windows, ADR 0008 "Windows (A4)") and, on darwin, the mock keychain so
 // Chrome never touches the user's login keychain.
 func mandatorySwitches(goos string) []string {
@@ -116,6 +118,7 @@ func mandatorySwitches(goos string) []string {
 		"user-data-dir",
 		"host-resolver-rules",
 		"force-webrtc-ip-handling-policy",
+		"webrtc-ip-handling-policy",
 		"dns-prefetch-disable",
 		transport,
 	}
@@ -167,9 +170,9 @@ func checkSwitch(goos, name, value string, hasValue bool) error {
 		if value == "" {
 			return fmt.Errorf("%w: empty --user-data-dir", ErrForbiddenFlag)
 		}
-	case "force-webrtc-ip-handling-policy":
+	case "force-webrtc-ip-handling-policy", "webrtc-ip-handling-policy":
 		if value != "disable_non_proxied_udp" {
-			return fmt.Errorf("%w: --force-webrtc-ip-handling-policy weakened", ErrForbiddenFlag)
+			return fmt.Errorf("%w: --%s weakened", ErrForbiddenFlag, name)
 		}
 	case "password-store":
 		if value != "basic" {
