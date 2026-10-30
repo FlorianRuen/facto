@@ -24,7 +24,7 @@ No supplier connector is implemented yet. Connector sheets live in
 
 | Connector | Status |
 | --- | --- |
-| [`fakeprovider`](docs/connectors/fakeprovider.md) (test only, e2e builds) | beta: HTTP side (list, fetch, persist, probe); login in progress |
+| [`fakeprovider`](docs/connectors/fakeprovider.md) (test only, e2e builds) | beta: HTTP side (list, fetch, persist, probe) and login flows (unit-tested); e2e fake site in progress |
 
 ## Install
 
@@ -375,6 +375,6 @@ The Makefile is the only entry point:
 
 `make e2e` needs Docker: it starts a pinned Vaultwarden container, then runs
 the scenarios in `test/e2e/`. `connectors/fakeprovider` has its HTTP side
-(list, fetch, persist, probe); its login flows and the e2e fake site are still
+(list, fetch, persist, probe) and its login flows; the e2e fake site is still
 to come, so the scenarios drive the `inbox` and the configuration checks. See
 [`CONTRIBUTING.md`](CONTRIBUTING.md#end-to-end-tests).

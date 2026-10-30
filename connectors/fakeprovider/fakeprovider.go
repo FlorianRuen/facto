@@ -10,9 +10,8 @@
 package fakeprovider
 
 import (
-	"context"
-	"errors"
 	"regexp"
+	"time"
 
 	"github.com/FlorianRuen/facto/internal/connector"
 )
@@ -23,7 +22,7 @@ const ID = "fakeprovider"
 // The two hosts of the fake site, in Info().AllowedDomains order.
 const (
 	HostWWW = "www.fakeprovider.test" // API and PDFs
-	HostSSO = "sso.fakeprovider.test" // login pages (T21)
+	HostSSO = "sso.fakeprovider.test" // SSO login pages
 )
 
 // Caps, applied when the matching Options field is zero (or negative).
@@ -32,14 +31,13 @@ const (
 	DefaultMaxItems           = 2000     // items across all pages
 	DefaultMaxPages           = 50       // pages per List call
 	DefaultMaxPDFBytes  int64 = 20 << 20 // one PDF body
+
+	DefaultStepTimeout = 30 * time.Second // one automated browser step
+	DefaultUserTimeout = 10 * time.Minute // the user completing a login by hand
 )
 
 // maxProbeBytes caps the /api/me body.
 const maxProbeBytes int64 = 64 << 10
-
-// ErrLoginNotImplemented is returned by Login until plan J1 T21 implements
-// the browser flows.
-var ErrLoginNotImplemented = errors.New("fakeprovider: login not implemented in T20")
 
 // Wire formats shared with the fake site.
 var (
@@ -49,12 +47,20 @@ var (
 	dateRe     = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`)
 )
 
-// Options tunes the caps; zero fields take the Default* values.
+// Options tunes the caps and login timeouts; zero fields take the Default*
+// values.
 type Options struct {
 	MaxListBytes int64
 	MaxItems     int
 	MaxPages     int
 	MaxPDFBytes  int64
+	// StepTimeout bounds each automated browser step (navigate, wait, type,
+	// click, read the URL or the cookies): the browser polls until its
+	// context ends.
+	StepTimeout time.Duration
+	// UserTimeout bounds the wait for a user completing the login by hand
+	// in a visible browser (captcha).
+	UserTimeout time.Duration
 }
 
 // Connector is the fakeprovider connector. Safe for concurrent use: it
@@ -77,6 +83,12 @@ func New(opts Options) *Connector {
 	if opts.MaxPDFBytes <= 0 {
 		opts.MaxPDFBytes = DefaultMaxPDFBytes
 	}
+	if opts.StepTimeout <= 0 {
+		opts.StepTimeout = DefaultStepTimeout
+	}
+	if opts.UserTimeout <= 0 {
+		opts.UserTimeout = DefaultUserTimeout
+	}
 	return &Connector{opts: opts}
 }
 
@@ -95,10 +107,4 @@ func (c *Connector) Info() connector.Info {
 		Kinds:          []connector.DocKind{connector.Invoice},
 		AllowedDomains: allowedHosts(),
 	}
-}
-
-// Login is implemented by plan J1 T21 (browser flows over BrowserPool).
-// Until then it always fails with ErrLoginNotImplemented.
-func (c *Connector) Login(_ context.Context, _ connector.Env) (connector.Session, error) {
-	return nil, ErrLoginNotImplemented
 }

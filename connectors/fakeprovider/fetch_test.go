@@ -239,3 +239,34 @@ func TestFetch_NonPDFRefused(t *testing.T) {
 		})
 	}
 }
+
+// TestFetch_DeclaredLengthCapWrapsErrBroken (plan J1 T21, from the T20
+// review): a declared Content-Length over MaxPDFBytes is classified like
+// List's body cap, so the orchestrator marks the connector broken: the
+// error matches both httpx.ErrBodyTooLarge and connector.ErrBroken, names
+// the endpoint path and never its query, and no byte is read.
+func TestFetch_DeclaredLengthCapWrapsErrBroken(t *testing.T) {
+	t.Parallel()
+	ck := canaryCookie(t)
+	big := append(append([]byte{}, syntheticPDF...), bytes.Repeat([]byte{' '}, 4096)...)
+	s := pdfSite(t, ck, "application/pdf", big, false)
+
+	rc, err := fakeprovider.New(fakeprovider.Options{MaxPDFBytes: 1024}).Fetch(t.Context(), s.session(t, ck), pdfRef(pdfID))
+	if err == nil {
+		_ = rc.Close()
+		t.Fatal("Fetch accepted a Content-Length over MaxPDFBytes")
+	}
+	if !errors.Is(err, httpx.ErrBodyTooLarge) {
+		t.Errorf("Fetch error = %v, want httpx.ErrBodyTooLarge in the chain", err)
+	}
+	if !errors.Is(err, connector.ErrBroken) {
+		t.Errorf("Fetch error = %v, want connector.ErrBroken in the chain (same classification as List)", err)
+	}
+	if !strings.Contains(err.Error(), "/api/invoices/"+pdfID+"/pdf") {
+		t.Errorf("Fetch error = %q, want it to name the endpoint path", err)
+	}
+	noQueryInError(t, err)
+	if strings.Contains(err.Error(), ck) {
+		t.Error("Fetch error renders the session cookie")
+	}
+}

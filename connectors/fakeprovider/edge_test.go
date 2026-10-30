@@ -17,11 +17,15 @@ import (
 	"github.com/FlorianRuen/facto/internal/secret"
 )
 
-func TestLogin_NotImplementedUntilT21(t *testing.T) {
+// TestLogin_EmptyEnvFailsWithoutPanic replaces the T20 placeholder
+// (TestLogin_NotImplementedUntilT21): T21 removed ErrLoginNotImplemented.
+// An Env with no resolver, no browser, no HTTP client and no prompter is
+// refused with an error, never a nil-pointer panic.
+func TestLogin_EmptyEnvFailsWithoutPanic(t *testing.T) {
 	t.Parallel()
 	sess, err := fakeprovider.New(fakeprovider.Options{}).Login(t.Context(), connector.Env{})
-	if !errors.Is(err, fakeprovider.ErrLoginNotImplemented) || sess != nil {
-		t.Fatalf("Login = %v, %v; want nil, ErrLoginNotImplemented", sess, err)
+	if err == nil || sess != nil {
+		t.Fatalf("Login(empty Env) = %v, %v; want nil and an error", sess, err)
 	}
 }
 

@@ -19,7 +19,8 @@ var pdfMagic = []byte("%PDF-")
 // Fetch streams one invoice PDF. ref.ProviderID is re-validated before any
 // request. The answer must be application/pdf and start with "%PDF-" (else
 // connector.ErrBroken). A declared Content-Length over MaxPDFBytes fails
-// with httpx.ErrBodyTooLarge before reading; an undeclared oversized body
+// with httpx.ErrBodyTooLarge and connector.ErrBroken (same classification
+// as List) before reading; an undeclared oversized body
 // fails the read with httpx.ErrBodyTooLarge, never silently truncated. The
 // caller closes the reader.
 func (c *Connector) Fetch(ctx context.Context, s connector.Session, ref connector.DocumentRef) (io.ReadCloser, error) {
@@ -50,7 +51,7 @@ func (c *Connector) checkPDF(path string, r reply) (io.ReadCloser, error) {
 		return nil, fmt.Errorf("%w: %s: content type is not %s", connector.ErrBroken, path, pdfMime)
 	}
 	if r.length > c.opts.MaxPDFBytes {
-		return nil, fmt.Errorf("%s: declared length over %d bytes: %w", path, c.opts.MaxPDFBytes, httpx.ErrBodyTooLarge)
+		return nil, fmt.Errorf("%w: %s: declared length over %d bytes: %w", connector.ErrBroken, path, c.opts.MaxPDFBytes, httpx.ErrBodyTooLarge)
 	}
 	body := httpx.LimitBody(r.body, c.opts.MaxPDFBytes)
 	head := make([]byte, len(pdfMagic))
