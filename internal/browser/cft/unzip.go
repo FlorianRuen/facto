@@ -82,31 +82,45 @@ type entry struct {
 // may leave the entries already written in dst: callers extract into a
 // staging directory they discard on error.
 func Unzip(ctx context.Context, ra io.ReaderAt, size int64, dst *fsx.Root, lim Limits) error {
+	_, err := unzip(ctx, ra, size, dst, lim)
+	return err
+}
+
+// unzip is Unzip that also returns the cleaned names of the file entries
+// it wrote with an execute bit in the archive. Install checks the chrome
+// entry there: the archive mode is what tells the pinned build, and it is
+// the only one left on Windows, where the extracted file has no POSIX
+// mode bits.
+func unzip(ctx context.Context, ra io.ReaderAt, size int64, dst *fsx.Root, lim Limits) (map[string]bool, error) {
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("cft unzip: %w", err)
+		return nil, fmt.Errorf("cft unzip: %w", err)
 	}
 	lim = lim.withDefaults()
 	zr, err := zip.NewReader(ra, size)
 	if err != nil {
 		if errors.Is(err, zip.ErrInsecurePath) {
-			return fmt.Errorf("cft unzip: %w: %w", ErrUnsafeEntry, err)
+			return nil, fmt.Errorf("cft unzip: %w: %w", ErrUnsafeEntry, err)
 		}
-		return fmt.Errorf("cft unzip: open archive: %w", err)
+		return nil, fmt.Errorf("cft unzip: open archive: %w", err)
 	}
 	plan, err := planEntries(zr.File, lim)
 	if err != nil {
-		return fmt.Errorf("cft unzip: %w", err)
+		return nil, fmt.Errorf("cft unzip: %w", err)
 	}
 	rem := &budget{left: lim.MaxTotal}
+	execs := map[string]bool{}
 	for _, e := range plan {
 		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("cft unzip: %w", err)
+			return nil, fmt.Errorf("cft unzip: %w", err)
 		}
 		if err := extract(ctx, dst, e, rem); err != nil {
-			return fmt.Errorf("cft unzip %q: %w", e.name, err)
+			return nil, fmt.Errorf("cft unzip %q: %w", e.name, err)
+		}
+		if e.exec && !e.dir {
+			execs[e.name] = true
 		}
 	}
-	return nil
+	return execs, nil
 }
 
 // planEntries validates every header and returns the entries to extract,

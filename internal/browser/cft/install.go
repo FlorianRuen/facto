@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -317,21 +318,31 @@ func (in *Installer) extract(ctx context.Context, wr *fsx.Root, archive *os.File
 		return fmt.Errorf("cft install: %w", err)
 	}
 	defer func() { _ = st.Close() }() // directory handle
-	if err := Unzip(ctx, archive, in.m.Size, st, in.lim); err != nil {
+	execs, err := unzip(ctx, archive, in.m.Size, st, in.lim)
+	if err != nil {
 		return err
 	}
 	fi, err := st.Lstat(in.executable())
 	if err != nil || !fi.Mode().IsRegular() {
 		return fmt.Errorf("%w: %s", errNoExecutable, in.executable())
 	}
-	// Unzip writes 0700 only for an entry with an execute bit: an archive
-	// whose chrome entry has none (or no Unix mode at all) is not the
-	// pinned build.
-	if fi.Mode().Perm()&0o100 == 0 {
+	// An archive whose chrome entry has no execute bit (or no Unix mode at
+	// all) is not the pinned build, on every OS.
+	if !execs[in.executable()] {
+		return fmt.Errorf("%w: %s is not executable by its owner", errNoExecutable, in.executable())
+	}
+	// Unzip writes 0700 only for an entry with an execute bit: on unix the
+	// extracted file must show it too. Windows has no POSIX mode bits (os
+	// reports 0666 for every regular file, SEC-J0-18): the archive mode
+	// above and the regular-file check are what is left there.
+	if posixModes && fi.Mode().Perm()&0o100 == 0 {
 		return fmt.Errorf("%w: %s is not executable by its owner", errNoExecutable, in.executable())
 	}
 	return nil
 }
+
+// posixModes reports whether the OS keeps POSIX permission bits on files.
+const posixModes = runtime.GOOS != "windows"
 
 // swap moves the staging tree in as <Version>/ (an existing one is moved
 // into the work directory first) and writes the marker last. On failure it

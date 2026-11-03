@@ -51,3 +51,60 @@ func TestPrepareWith_PrivateDirs(t *testing.T) {
 		})
 	}
 }
+
+// TestLaunchEnv_PrivateDirsInTargetSyntax: the private XDG paths are joined
+// in the path syntax of Options.GOOS, the one the private dir was vetted
+// in, whatever the host: a launch never mixes '/' and '\'.
+func TestLaunchEnv_PrivateDirsInTargetSyntax(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		goos, profile, private string
+		want                   map[string]string
+	}{
+		{
+			goos: goosLinux, profile: "/facto-test/profile", private: "/facto-test/area",
+			want: map[string]string{
+				"TMPDIR":          "/facto-test/area",
+				"XDG_CONFIG_HOME": "/facto-test/area/config",
+				"XDG_CACHE_HOME":  "/facto-test/area/cache",
+				"XDG_DATA_HOME":   "/facto-test/area/data",
+				"XDG_STATE_HOME":  "/facto-test/area/state",
+			},
+		},
+		{
+			goos: goosDarwin, profile: "/facto-test/profile", private: "/facto-test/area",
+			want: map[string]string{
+				"TMPDIR":          "/facto-test/area",
+				"XDG_CONFIG_HOME": "/facto-test/area/config",
+				"XDG_CACHE_HOME":  "/facto-test/area/cache",
+				"XDG_DATA_HOME":   "/facto-test/area/data",
+				"XDG_STATE_HOME":  "/facto-test/area/state",
+			},
+		},
+		{
+			goos: goosWindows, profile: `C:\facto-test\profile`, private: `C:\facto-test\area`,
+			want: map[string]string{
+				"TMPDIR":          `C:\facto-test\area`,
+				"XDG_CONFIG_HOME": `C:\facto-test\area\config`,
+				"XDG_CACHE_HOME":  `C:\facto-test\area\cache`,
+				"XDG_DATA_HOME":   `C:\facto-test\area\data`,
+				"XDG_STATE_HOME":  `C:\facto-test\area\state`,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.goos, func(t *testing.T) {
+			t.Parallel()
+			opts := Options{GOOS: tt.goos, ProfileDir: tt.profile, AllowedDomains: []string{"login.supplier.example"}, privateDir: tt.private, tempDir: tt.private}
+			env, err := launchEnv(func(string) (string, bool) { return "", false }, opts)
+			if err != nil {
+				t.Fatalf("launchEnv: %v", err)
+			}
+			for k, v := range tt.want {
+				if !slices.Contains(env, k+"="+v) {
+					t.Errorf("env = %q, want %s=%s", env, k, v)
+				}
+			}
+		})
+	}
+}

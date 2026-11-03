@@ -128,7 +128,7 @@ func launchEnv(lookup func(string) (string, bool), opts Options) ([]string, erro
 			return nil, fmt.Errorf("private launch dir: %w", err)
 		}
 	}
-	env := BuildLaunchEnv(lookup, opts.privateDir, opts.tempDir)
+	env := buildLaunchEnv(goos, lookup, opts.privateDir, opts.tempDir)
 	if err := checkSocketPath(goos, env); err != nil {
 		return nil, err
 	}

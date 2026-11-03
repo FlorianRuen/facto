@@ -2,7 +2,8 @@ package browser
 
 import (
 	"fmt"
-	"path/filepath"
+	"path"
+	"runtime"
 	"slices"
 	"strings"
 )
@@ -75,7 +76,15 @@ var privateXDG = []struct{ env, sub string }{
 // and XDG_CONFIG_HOME, XDG_CACHE_HOME, XDG_DATA_HOME and XDG_STATE_HOME set
 // to <private>/config, cache, data and state when private is not "". HOME, DISPLAY and the other
 // allowlisted variables are kept: fonts and the display keep working.
+// The XDG paths are joined in the path syntax of the host (runtime.GOOS).
 func BuildLaunchEnv(lookup func(string) (string, bool), private, tmp string) []string {
+	return buildLaunchEnv(runtime.GOOS, lookup, private, tmp)
+}
+
+// buildLaunchEnv is BuildLaunchEnv for a Chrome targeting goos: the XDG
+// paths are joined in the path syntax of goos, the one checkProfileDir
+// vetted private in, so a launch never mixes separators.
+func buildLaunchEnv(goos string, lookup func(string) (string, bool), private, tmp string) []string {
 	env := BuildEnv(lookup)
 	if tmp != "" {
 		env = slices.DeleteFunc(env, func(kv string) bool { return strings.HasPrefix(kv, "TMPDIR=") })
@@ -83,10 +92,19 @@ func BuildLaunchEnv(lookup func(string) (string, bool), private, tmp string) []s
 	}
 	if private != "" {
 		for _, x := range privateXDG {
-			env = append(env, x.env+"="+filepath.Join(private, x.sub))
+			env = append(env, x.env+"="+joinFor(goos, private, x.sub))
 		}
 	}
 	return env
+}
+
+// joinFor joins dir and a single clean element sub in the path syntax of
+// goos: a backslash on Windows, a slash elsewhere.
+func joinFor(goos, dir, sub string) string {
+	if goos == goosWindows {
+		return strings.TrimSuffix(dir, `\`) + `\` + sub
+	}
+	return path.Join(dir, sub)
 }
 
 // singletonSocketSuffix is what Chrome appends to its TMPDIR for the
