@@ -1,0 +1,4 @@
+go test fuzz v1
+string("Cookie: a; Path=/x token=\"abc;def\" password=LEAKME1")
+string("")
+byte('0')

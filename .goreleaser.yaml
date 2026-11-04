@@ -14,7 +14,9 @@ builds:
     binary: facto
     env:
       - CGO_ENABLED=0
-    goos: [linux, darwin, windows]
+    # No windows until the browser runs in a Job object: release gate of
+    # ADR 0008, issue #3 (SEC-J1-11). make release-e2e-check refuses it.
+    goos: [linux, darwin]
     goarch: [amd64, arm64]
     # Reproducible: no local paths, no build ID, timestamps from the commit.
     flags:
@@ -27,6 +29,7 @@ archives:
   - id: facto
     ids: [facto]
     formats: [tar.gz]
+    # Kept for when the ADR 0008 Windows gate (issue #3) is lifted.
     format_overrides:
       - goos: windows
         formats: [zip]

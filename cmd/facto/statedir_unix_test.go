@@ -68,8 +68,9 @@ func TestCheckStateDirOutside(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			state, out := tt.setup(t, t.TempDir())
-			err := checkStateDirOutside(state, out)
+			root := t.TempDir()
+			state, out := tt.setup(t, root)
+			err := checkStateDirOutside(state, out, root)
 			switch {
 			case tt.refused:
 				if !errors.Is(err, config.ErrStateDirInOutput) || !errors.Is(err, orchestrator.ErrConfig) || !errors.Is(err, config.ErrInvalid) {

@@ -59,9 +59,20 @@ func ParseRef(s string) (Ref, error) {
 	case SchemeKeyring:
 		return parseKeyring(rest)
 	default:
+		if testSchemeParser != nil {
+			if ref, ok, err := testSchemeParser(scheme, rest); ok {
+				return ref, err
+			}
+		}
 		return Ref{}, invalid("unknown scheme (want bw or keyring)")
 	}
 }
+
+// testSchemeParser parses the references of a test-only scheme. It is nil
+// in every build but -tags e2e, where ref_e2e.go sets it once at package
+// initialization (ADR 0009 A3: e2e-only secret sources are absent from
+// release builds). ok is false for any other scheme.
+var testSchemeParser func(scheme, rest string) (ref Ref, ok bool, err error)
 
 func parseBitwarden(rest string) (Ref, error) {
 	item, field, ok := strings.Cut(rest, "/")

@@ -20,10 +20,14 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/FlorianRuen/facto/internal/browser/cft"
 	"github.com/FlorianRuen/facto/internal/clock"
+	"github.com/FlorianRuen/facto/internal/config"
+	"github.com/FlorianRuen/facto/internal/connector"
 	"github.com/FlorianRuen/facto/internal/logx"
 	"github.com/FlorianRuen/facto/internal/orchestrator"
 	"github.com/FlorianRuen/facto/internal/proc"
+	"github.com/FlorianRuen/facto/internal/vault"
 )
 
 // version is the release version, set with -ldflags "-X main.version=…".
@@ -39,6 +43,46 @@ type env struct {
 	Clock clock.Clock
 	// LookupEnv reads one environment variable (os.LookupEnv in production).
 	LookupEnv func(string) (string, bool)
+	// NewSecrets builds the run's secret resolver; nil means
+	// newSecretResolver. Test seam.
+	NewSecrets func(ctx context.Context, e env, cfg *config.Config) (secretResolver, error)
+	// Terminal is the controlling-terminal seam; nil = the OS terminal
+	// (isTerminal and a termios/console no-echo read).
+	Terminal terminal
+	// KeyBackend returns the session key backend; nil = the OS keyring,
+	// probed once (defaultKeyBackend). An error means "no keyring": sessions
+	// are ephemeral for the run, with one warning (A3).
+	KeyBackend func(ctx context.Context, e env) (vault.KeyBackend, error)
+	// NewPool builds the run's browser pool; nil = newBrowserPool.
+	NewPool func(ctx context.Context, e env, p poolParams) (browserPool, error)
+	// Connectors returns every connector this build ships; nil =
+	// availableConnectors.
+	Connectors func() (*connector.Registry, error)
+	// InstalledBrowser returns the Chrome installed by `facto browser
+	// install` under the configured state dir; nil = installedBrowser.
+	InstalledBrowser func(e env, stateDir string) (string, bool)
+	// InstallBrowser installs the Chrome for Testing build of opts and
+	// returns the executable path; nil means installPinnedBrowser (real
+	// download). Test seam: CLI tests never touch the network.
+	InstallBrowser func(ctx context.Context, opts cft.Options) (string, error)
+}
+
+// terminal returns e.Terminal, or the OS terminal.
+func (e env) terminal() terminal {
+	if e.Terminal != nil {
+		return e.Terminal
+	}
+	return &osTerminal{}
+}
+
+// lookupEnv returns the value of the environment variable k, "" when it is
+// unset or e.LookupEnv is nil.
+func (e env) lookupEnv(k string) string {
+	if e.LookupEnv == nil {
+		return ""
+	}
+	v, _ := e.LookupEnv(k)
+	return v
 }
 
 func main() {
@@ -48,11 +92,13 @@ func main() {
 	os.Exit(code)
 }
 
-// shutdownSignals cancel a run: Ctrl-C, and SIGTERM sent by service
-// managers (systemd stop, launchd unload). On Windows the runtime never
-// delivers SIGTERM; listing it is harmless.
+// shutdownSignals cancel a run: Ctrl-C, SIGTERM sent by service managers
+// (systemd stop, launchd unload), and SIGHUP when the terminal is closed,
+// so that a prompt waiting with echo off turns it back on before facto
+// exits. On Windows the runtime never delivers SIGTERM or SIGHUP; listing
+// them is harmless.
 func shutdownSignals() []os.Signal {
-	return []os.Signal{os.Interrupt, syscall.SIGTERM}
+	return []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP}
 }
 
 // run is the production entry point: it hardens the process (no core dump,
@@ -137,7 +183,7 @@ func newRootCmd(ctx context.Context, e env, stdin io.Reader, stdout, stderr io.W
 	root.SetIn(stdin)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
-	root.AddCommand(newVersionCmd(), newCollectCmd(ctx, e))
+	root.AddCommand(newVersionCmd(), newCollectCmd(ctx, e), newLoginCmd(ctx, e), newBrowserCmd(ctx, e))
 	return root
 }
 

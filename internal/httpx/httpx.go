@@ -7,6 +7,10 @@
 // query string, fragment, userinfo or header value. See docs/spec.md
 // "Threat model" (exfiltration by a connector).
 //
+// NewPinned builds the same client restricted to one exact host and one
+// path prefix instead of an allowlist, for downloads from shared storage
+// hosts that ParseAllowlist refuses (Chrome for Testing, ADR 0008).
+//
 // httpx imports only the standard library: internal/connector delegates
 // AllowedDomains validation to ParseAllowlist.
 package httpx
@@ -32,6 +36,10 @@ var (
 	ErrInsecureScheme   = errors.New("httpx: only https is allowed")
 	ErrInvalidAllowlist = errors.New("httpx: invalid allowlist")
 	ErrBodyTooLarge     = errors.New("httpx: body too large")
+	// ErrPathNotAllowed reports, on a NewPinned client, a URL path outside
+	// the pinned prefix or not in canonical form (dot segment, empty
+	// segment, percent-encoding, backslash).
+	ErrPathNotAllowed = errors.New("httpx: path not allowed")
 )
 
 // Defaults applied when the matching Options field is zero.
@@ -80,7 +88,10 @@ type Options struct {
 
 // Client is an allowlisted HTTPS client. Safe for concurrent use.
 type Client struct {
-	allow   Allowlist
+	allow Allowlist
+	// pin, when non-nil, replaces allow: exact host and path prefix
+	// (NewPinned).
+	pin     *pin
 	hc      *http.Client
 	timeout time.Duration
 }
@@ -92,6 +103,12 @@ func New(allowed []string, opts Options) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	return newClient(allow, nil, opts)
+}
+
+// newClient builds a client enforcing allow, or p when p is non-nil.
+func newClient(allow Allowlist, p *pin, opts Options) (*Client, error) {
+	var err error
 	jar := opts.Jar
 	if jar == nil {
 		// Without a public suffix list the jar is strict per host, which
@@ -113,7 +130,7 @@ func New(allowed []string, opts Options) (*Client, error) {
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
-	c := &Client{allow: allow, timeout: timeout}
+	c := &Client{allow: allow, pin: p, timeout: timeout}
 	tr := &http.Transport{
 		Proxy:       opts.Proxy, // nil: never the environment
 		DialContext: dial,
@@ -206,7 +223,8 @@ func closeBody(req *http.Request) {
 	}
 }
 
-// check enforces the scheme and the allowlist on one hop.
+// check enforces the scheme and the allowlist, or the pin of a NewPinned
+// client, on one hop.
 func (c *Client) check(req *http.Request) error {
 	if !strings.EqualFold(req.URL.Scheme, "https") {
 		return fmt.Errorf("%w: %s", ErrInsecureScheme, req.URL.Host)
@@ -217,6 +235,9 @@ func (c *Client) check(req *http.Request) error {
 	// effective target. Opaque is never echoed: it may carry a query.
 	if req.URL.Opaque != "" {
 		return fmt.Errorf("%w: %s (opaque url)", ErrDomainNotAllowed, req.URL.Host)
+	}
+	if c.pin != nil {
+		return c.pin.check(req)
 	}
 	if !c.allow.Allows(req.URL.Host) {
 		return fmt.Errorf("%w: %s", ErrDomainNotAllowed, req.URL.Host)

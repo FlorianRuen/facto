@@ -1,13 +1,16 @@
 # Single entry points for humans, agents and CI. Keep targets stable: GOALS.md depends on them.
 GO        ?= go
 PKGS      := ./...
-COVER_GATES := internal/normalize:85 internal/store:85 internal/secret:85 internal/vault:85 internal/fsx:85 internal/httpx:85
+COVER_GATES := internal/normalize:85 internal/store:85 internal/secret:85 internal/vault:85 internal/fsx:85 internal/httpx:85 internal/browser/cft:85 internal/browser:85
 export FACTO_CANARY := 1
 # go test runs in each package directory: export absolute paths.
 export CANARY_FILE := $(CURDIR)/.cache/canaries.txt
 export ART_DIR := $(CURDIR)/.cache/test-artifacts
 
-.PHONY: verify fmt-check lint test race cover e2e leakcheck audit score-check tools lint-actions release-check
+# lint-selftest creates in-tree fixtures that race/lint must not see: never run targets in parallel.
+.NOTPARALLEL:
+
+.PHONY: verify fmt-check lint lint-selftest test race cover e2e e2e-unit e2e-browser-windows chrome leakcheck audit score-check tools lint-actions release-check release-e2e-check
 
 # goreleaser runs from its pinned image (ADR 0001) so its dependencies stay out
 # of tools/go.mod and the osv-scanner scope.
@@ -20,7 +23,7 @@ GORELEASER_RUN := -e HOME=/tmp -e GOFLAGS=-mod=readonly -e GOTOOLCHAIN=go$(shell
 	-e GOPROXY=file:///hostmod/cache/download -e GOSUMDB=off -e GOMODCACHE=/tmp/gomod \
 	-v $(shell $(GO) env GOMODCACHE):/hostmod:ro -v $(CURDIR):/src:ro
 
-verify: fmt-check lint race cover leakcheck ## everything required before a commit
+verify: fmt-check lint lint-selftest race cover e2e-unit release-e2e-check leakcheck ## everything required before a commit
 	@echo "verify: ok"
 
 fmt-check:
@@ -28,6 +31,16 @@ fmt-check:
 
 lint:
 	golangci-lint run
+
+# Proves two depguard rules are live, in production and test files:
+# - the ban on golang.org/x/crypto/openpgp (ADR 0009), by linting a throwaway
+#   module built under .cache/lint-selftest/ from the module cache only
+#   (GOPROXY=off);
+# - rule cdploopback (ADR 0008, J1 T7.1), by linting temporary in-tree fixtures
+#   (gitignored, removed on exit): internal/browser lints clean, imports from
+#   internal/httpx and other packages are rejected.
+lint-selftest:
+	GOLANGCI_LINT=golangci-lint GO=$(GO) ./scripts/lint-selftest.sh
 
 lint-actions:
 	actionlint
@@ -42,6 +55,13 @@ release-check:
 		git remote set-url origin https://github.com/FlorianRuen/facto.git && \
 		goreleaser check && goreleaser release --snapshot --clean --skip=sign,sbom,publish'
 
+# Proves the release build has no e2e-only code (ADR 0009 A3, J1 T17): with
+# the exact .goreleaser.yaml flags, go list -deps finds no e2e-only package
+# or e2e-tagged file and go tool nm no e2e symbol; the same check on a
+# -tags e2e build must hit. Separate from release-check (goreleaser snapshot).
+release-e2e-check:
+	@$(GO) run ./scripts/release-e2e-check
+
 test:
 	$(GO) test -short -count=1 $(PKGS)
 
@@ -53,13 +73,48 @@ race:
 	install -m 600 /dev/null "$(CANARY_FILE)"
 	$(GO) test -race -count=1 -coverprofile=.cache/coverage.out $(PKGS)
 
+# Unit tests of the e2e build, in every package holding a Go file whose
+# //go:build line mentions the e2e tag (test files included), computed from
+# the tree. test/e2e is excluded: it needs the Vaultwarden container and
+# runs in make e2e.
+E2E_UNIT_PKGS = $(shell git ls-files --cached --others --exclude-standard '*.go' | \
+	xargs grep -lE '^//go:build .*\<e2e\>' | xargs -n1 dirname | sort -u | \
+	grep -vx 'test/e2e' | sed 's|^|./|')
+
+e2e-unit:
+	$(GO) test -race -count=1 -tags e2e $(E2E_UNIT_PKGS)
+
 cover: race
 	./scripts/check-coverage.sh .cache/coverage.out "$(COVER_GATES)" 70
 
-e2e:
+# Pinned Chrome for Testing for development and make e2e (ADR 0008, J1 T12):
+# facto browser install, the same verified download as for users, into
+# .cache/chrome (gitignored, 0700). Idempotent: a verified install is kept
+# without any network I/O. Prints the executable path.
+CHROME_DIR := $(CURDIR)/.cache/chrome
+# The pinned version, read from the single place it is set (cft.Pinned).
+CHROME_VERSION := $(shell sed -n 's/^[[:space:]]*Version:[[:space:]]*"\([^"]*\)",/\1/p' internal/browser/cft/pinned.go)
+
+chrome:
+	mkdir -p .cache
+	$(GO) run ./cmd/facto browser install --dir "$(CHROME_DIR)"
+
+# make e2e: the real-Chrome isolation checks (J1 T13) need the chrome build
+# tag on top of e2e, so e2e-unit (in verify) never needs a browser. Then the
+# scenario harness (J1 T22: test/e2e, facto built with -tags e2e against the
+# fake site on 127.0.0.1). Both get the same FACTO_E2E_CHROME, built from
+# CHROME_DIR and CHROME_VERSION: the pinned build `chrome` installed and
+# verified (no second install run).
+e2e: chrome
+	FACTO_E2E_CHROME="$(CHROME_DIR)/$(CHROME_VERSION)/chrome-linux64/chrome" $(GO) test -race -tags e2e,chrome -count=1 -v ./internal/browser/...
 	docker compose -f test/compose.yaml up -d --wait vaultwarden
-	$(GO) test -tags e2e -count=1 -v ./test/e2e/... ; status=$$?; \
+	FACTO_E2E_CHROME="$(CHROME_DIR)/$(CHROME_VERSION)/chrome-linux64/chrome" $(GO) test -tags e2e -count=1 -v ./test/e2e/... ; status=$$?; \
 	docker compose -f test/compose.yaml down -v; exit $$status
+
+# Real-Chrome Windows checks (J1 T13/T32): exactly the command of the
+# browser-windows CI job; FACTO_E2E_CHROME names the Chrome to drive.
+e2e-browser-windows:
+	$(GO) test -tags e2e,chrome -count=1 -v -run '^TestChromeWindows_' ./internal/browser/...
 
 leakcheck:
 	./scripts/leakcheck.sh

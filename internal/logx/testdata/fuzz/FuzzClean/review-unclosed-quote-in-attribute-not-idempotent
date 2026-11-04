@@ -1,0 +1,4 @@
+go test fuzz v1
+string("Set-Cookie: a; Path=/ token:\"x Set-Cookie: a; Path=/ token:\"x ")
+string("")
+byte('0')

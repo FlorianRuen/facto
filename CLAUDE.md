@@ -15,6 +15,11 @@ Read it before any architectural change.
 | `make leakcheck` | Canary secret scan over every file, log and report produced by the tests |
 | `make audit` | govulncheck, gosec, gitleaks, osv-scanner; writes `security/scanners.json` |
 | `make score-check` | Fails if `security/score.json` is missing, stale or under the gate |
+| `make chrome` | Installs the pinned Chrome for Testing into `.cache/chrome` (`facto browser install`, verified by size and SHA-256); `make e2e` depends on it and also runs the real-Chrome tests (`-tags e2e,chrome`) |
+| `make e2e-unit` | Unit tests with `-race -tags e2e` in every package with e2e-only files; never needs Chrome (run by `verify`) |
+| `make release-e2e-check` | Fails if the release build (exact `.goreleaser.yaml` flags) contains e2e-only code; prints `release-check: release build has no e2e-only code` (run by `verify`) |
+| `make lint-selftest` | Proves the openpgp depguard ban and the `cdploopback` / `NewPinned` caller rules are live (run by `verify`) |
+| `make e2e-browser-windows` | Windows only: real-Chrome `TestChromeWindows_*` checks (CDP port on 127.0.0.1 only); needs `FACTO_E2E_CHROME` |
 
 Never invent other ways to build or test. If a target is missing, add it to the Makefile.
 

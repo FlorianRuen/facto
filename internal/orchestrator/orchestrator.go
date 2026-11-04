@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 
+	"github.com/FlorianRuen/facto/internal/connector"
 	"github.com/FlorianRuen/facto/internal/dest"
 	"github.com/FlorianRuen/facto/internal/inbox"
 	"github.com/FlorianRuen/facto/internal/logx"
@@ -64,17 +66,41 @@ type Deps struct {
 	Log     *slog.Logger // nil = discard; New always wraps its handler in logx.NewHandler
 	MaxSize int64        // <= 0 = DefaultMaxSize
 	NewHTTP HTTPFactory  // client per connector; nil = httpx.New(allowed, httpx.Options{})
+	// Secrets is copied into every connector.Env; nil = none. The
+	// orchestrator never closes it: its owner (the CLI) does.
+	Secrets connector.SecretResolver
+	// Sessions saves and restores connector sessions; nil (or not
+	// Persistent) = nothing is loaded, saved or deleted.
+	Sessions SessionStore
+	// Browser is the pool behind Env.Browser, available during Login only;
+	// nil = Env.Browser stays nil. The orchestrator never launches one itself.
+	Browser connector.BrowserPool
+	// Prompt is copied into every connector.Env, and Env.Interactive is
+	// Prompt.Interactive(); nil = Env.Prompt stays nil and Env.Interactive
+	// false.
+	Prompt connector.Prompter
+	// Credentials are the configured secret references of each connector,
+	// by connector id (config.yaml connectors.<id>), copied into its
+	// Env.Credentials. A connector without an entry gets none.
+	Credentials map[string]connector.Credentials
 }
 
 // Orchestrator files documents. It is safe for sequential use; the pipeline
 // processes one document at a time.
 type Orchestrator struct {
-	idx     Index
-	dst     Destination
-	namer   Namer
-	log     *slog.Logger
-	maxSize int64
-	newHTTP HTTPFactory
+	idx      Index
+	dst      Destination
+	namer    Namer
+	log      *slog.Logger
+	maxSize  int64
+	newHTTP  HTTPFactory
+	secrets  connector.SecretResolver
+	sessions SessionStore
+	browser  connector.BrowserPool
+	prompt   connector.Prompter
+	creds    map[string]connector.Credentials
+	// loginOnly makes runSteps stop after a fresh Login and its save (Login).
+	loginOnly bool
 }
 
 // New validates d and returns an Orchestrator. A missing Index, Dest or
@@ -89,6 +115,13 @@ func New(d Deps) (*Orchestrator, error) {
 	case d.Namer == nil:
 		return nil, fmt.Errorf("%w: no namer", ErrInvalidDeps)
 	}
+	return build(d), nil
+}
+
+// build returns an Orchestrator over d without checking the pipeline
+// dependencies (Index, Dest, Namer), which only Run's fetch loop and
+// IngestInbox use.
+func build(d Deps) *Orchestrator {
 	inner := slog.DiscardHandler
 	if d.Log != nil {
 		inner = d.Log.Handler()
@@ -102,11 +135,16 @@ func New(d Deps) (*Orchestrator, error) {
 		newHTTP = defaultHTTP
 	}
 	return &Orchestrator{
-		newHTTP: newHTTP,
-		idx:     d.Index,
-		dst:     d.Dest,
-		namer:   d.Namer,
-		log:     slog.New(logx.NewHandler(inner, logx.Options{})),
-		maxSize: maxSize,
-	}, nil
+		newHTTP:  newHTTP,
+		idx:      d.Index,
+		dst:      d.Dest,
+		namer:    d.Namer,
+		log:      slog.New(logx.NewHandler(inner, logx.Options{})),
+		maxSize:  maxSize,
+		secrets:  d.Secrets,
+		sessions: d.Sessions,
+		browser:  d.Browser,
+		prompt:   d.Prompt,
+		creds:    maps.Clone(d.Credentials),
+	}
 }

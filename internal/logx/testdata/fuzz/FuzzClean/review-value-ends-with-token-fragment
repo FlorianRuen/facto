@@ -1,0 +1,4 @@
+go test fuzz v1
+string("password=hunter2Token=")
+string("")
+byte('0')

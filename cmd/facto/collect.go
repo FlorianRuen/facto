@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"slices"
 
 	"github.com/spf13/cobra"
 
@@ -67,13 +66,14 @@ func newCollectCmd(ctx context.Context, e env) *cobra.Command {
 				period = connector.Year(f.year)
 			}
 			var prompter inbox.Prompter
-			if !f.nonInteractive && isTerminal(cmd.InOrStdin()) {
+			if !f.nonInteractive && e.terminal().IsTerminal(cmd.InOrStdin()) {
 				prompter = newLinePrompter(cmd.InOrStdin(), cmd.ErrOrStderr())
 			}
 			return collect(ctx, e, collectParams{
 				configPath: f.config,
 				period:     period,
 				prompter:   prompter,
+				connPrompt: newPrompter(e, cmd.InOrStdin(), cmd.ErrOrStderr(), f.nonInteractive),
 				stdout:     cmd.OutOrStdout(),
 				stderr:     cmd.ErrOrStderr(),
 			})
@@ -91,6 +91,8 @@ type collectParams struct {
 	configPath string
 	period     connector.Period
 	prompter   inbox.Prompter
+	// connPrompt is handed to connectors (orchestrator.Deps.Prompt).
+	connPrompt connector.Prompter
 	stdout     io.Writer
 	stderr     io.Writer
 }
@@ -108,8 +110,23 @@ func collect(ctx context.Context, e env, p collectParams) error {
 		}
 		return configError(err)
 	}
-	reg, err := newRegistry(cfg)
+	shipped, err := shippedConnectors(e)
 	if err != nil {
+		return &exitError{code: orchestrator.ExitAttention, err: fmt.Errorf("connectors: %w", err)}
+	}
+	reg, err := enabledRegistry(cfg, shipped)
+	if err != nil {
+		return configError(err)
+	}
+	// Collect never needs a browser by itself: without one the pool is
+	// still built (it sweeps stale profiles, A12) and a connector that
+	// launches gets the pool's error.
+	hooks, err := loadRunHooks(e)
+	if err != nil {
+		return err
+	}
+	exe, err := resolveBrowserPath(cfg, installedWith(e, cfg.StateDir, hooks))
+	if err != nil && !errors.Is(err, errNoBrowser) {
 		return configError(err)
 	}
 	namer, err := normalize.NewNamer(normalize.Config{File: cfg.Naming.File, Dir: cfg.Naming.Dir, Language: cfg.Naming.Language})
@@ -117,18 +134,41 @@ func collect(ctx context.Context, e env, p collectParams) error {
 		return configError(fmt.Errorf("naming: %w", err))
 	}
 
+	// Built once per run, after every configuration check and before any
+	// folder is created; closed (password manager locked) on every path
+	// below, once the connectors and the inbox are done.
+	newSecrets := e.NewSecrets
+	if newSecrets == nil {
+		newSecrets = newSecretResolver
+	}
+	secrets, err := newSecrets(ctx, e, cfg)
+	if err != nil {
+		return &exitError{code: orchestrator.ExitAttention, err: fmt.Errorf("secrets: %w", err)}
+	}
+	closeSecrets := onceCloser(secrets)
+	// A panic anywhere below (outside the orchestrator's per-connector
+	// recover) still locks the password manager (SEC-J1-13).
+	defer func() { _ = closeSecrets() }()
+
 	log := slog.New(logx.NewHandler(slog.NewTextHandler(p.stderr, &slog.HandlerOptions{Level: slog.LevelWarn}), logx.Options{}))
+	warnIfStalePin(ctx, e, cfg, exe, log)
 	if cfg.Output.GDrive.Enabled {
 		log.WarnContext(ctx, "output.gdrive is not available in this version: documents are filed locally only")
 	}
 
 	report := orchestrator.Report{StartedAt: e.Clock.Now()}
-	stateReady, runErr := collectInto(ctx, e, cfg, collectDeps{reg: reg, namer: namer, log: log}, p, &report)
+	stateReady, runErr := collectInto(ctx, e, cfg, collectDeps{reg: reg, namer: namer, log: log, secrets: secrets, browserPath: exe, hooks: hooks}, p, &report)
+	closeSecretsErr := closeSecrets()
 	report.FinishedAt = e.Clock.Now()
 
 	code := orchestrator.ExitCode(report, runErr)
 	if runErr != nil {
 		writeErr(p.stderr, runErr)
+	}
+	if closeSecretsErr != nil {
+		// A password manager that may still be unlocked needs attention.
+		writeErr(p.stderr, closeSecretsErr)
+		code = max(code, orchestrator.ExitAttention)
 	}
 	// The report of a canceled run is still written: it tells the user which
 	// connector was interrupted. It needs the state dir, which opening the
@@ -155,6 +195,14 @@ type collectDeps struct {
 	reg   *connector.Registry
 	namer *normalize.Namer
 	log   *slog.Logger
+	// secrets is handed to every connector (orchestrator.Deps.Secrets);
+	// collect owns and closes it.
+	secrets connector.SecretResolver
+	// browserPath is the browser binary, "" when none is configured or
+	// installed.
+	browserPath string
+	// hooks are the run's test hooks (zero in a release build).
+	hooks runHooks
 }
 
 // collectInto opens the output folder, the index and the inbox, then fills
@@ -173,7 +221,7 @@ func collectInto(ctx context.Context, e env, cfg *config.Config, d collectDeps, 
 	}
 	// Before the index creates the state dir: config.Validate only compared
 	// the path text, and output.local may be a symlink.
-	if err := checkStateDirOutside(cfg.StateDir, cfg.Output.Local); err != nil {
+	if err := checkStateDirOutside(cfg.StateDir, cfg.Output.Local, cfg.Home()); err != nil {
 		return false, err
 	}
 
@@ -189,7 +237,30 @@ func collectInto(ctx context.Context, e env, cfg *config.Config, d collectDeps, 
 	}
 	defer func() { err = errors.Join(err, closeErr("output folder", dst.Close())) }()
 
-	orch, err := orchestrator.New(orchestrator.Deps{Index: idx, Dest: dst, Namer: d.namer, Log: d.log})
+	// The pool first: building it sweeps stale profiles (A12), which must
+	// happen even when the session store cannot be opened.
+	pool, err := buildPool(ctx, e, poolParams{StateDir: cfg.StateDir, Executable: d.browserPath, Interactive: false, Log: d.log, Configure: d.hooks.Pool})
+	if err != nil {
+		return true, err
+	}
+	defer func() { err = errors.Join(err, closeErr("browser pool", pool.Close())) }()
+	sessions, err := openSessions(ctx, e, cfg, d.log, p.connPrompt != nil && p.connPrompt.Interactive())
+	if err != nil {
+		return true, err
+	}
+
+	orch, err := orchestrator.New(orchestrator.Deps{
+		Index:       idx,
+		Dest:        dst,
+		Namer:       d.namer,
+		Log:         d.log,
+		NewHTTP:     d.hooks.NewHTTP,
+		Secrets:     d.secrets,
+		Sessions:    sessions,
+		Browser:     pool,
+		Prompt:      p.connPrompt,
+		Credentials: credentials(cfg),
+	})
 	if err != nil {
 		return true, fmt.Errorf("orchestrator: %w", err)
 	}
@@ -236,23 +307,6 @@ func closeErr(what string, err error) error {
 		return nil
 	}
 	return fmt.Errorf("close %s: %w", what, err)
-}
-
-// newRegistry returns the connectors enabled in cfg. No supplier connector
-// ships in this version, so an enabled one is a configuration error rather
-// than a silently skipped account.
-func newRegistry(cfg *config.Config) (*connector.Registry, error) {
-	var enabled []string
-	for id, c := range cfg.Connectors {
-		if c.Enabled {
-			enabled = append(enabled, id)
-		}
-	}
-	if len(enabled) > 0 {
-		slices.Sort(enabled)
-		return nil, fmt.Errorf("connectors.%s: connector not available in this version (set enabled: false)", enabled[0])
-	}
-	return connector.NewRegistry(), nil
 }
 
 // providerDefaults maps every provider id of the config ("manual:" entries

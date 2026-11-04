@@ -35,6 +35,7 @@ import (
 	"github.com/FlorianRuen/facto/internal/inbox"
 	"github.com/FlorianRuen/facto/internal/normalize"
 	"github.com/FlorianRuen/facto/internal/orchestrator"
+	"github.com/FlorianRuen/facto/internal/secret"
 	"github.com/FlorianRuen/facto/internal/store"
 	"github.com/FlorianRuen/facto/internal/testsecrets"
 )
@@ -607,4 +608,125 @@ func TestAttack_OrchConnectorPanicsAndErrorsNeverLeakCanaries(t *testing.T) {
 	}
 	atkNoCanary(t, "log", r.log.Bytes(), pw, ck, tok, sess)
 	atkNoCanary(t, "report", atkReportBytes(t, res), pw, ck, tok, sess)
+}
+
+// ---------------------------------------------------------------- J1 T27
+
+// atkPrompter answers every prompt with a fixed secret (the OTP a user
+// would type).
+type atkPrompter struct{ answer string }
+
+func (p atkPrompter) Prompt(context.Context, connector.PromptRequest) (secret.Secret, error) {
+	return secret.FromString(p.answer), nil
+}
+
+func (atkPrompter) Interactive() bool { return true }
+
+// atkPanicPersist is a Persistable session whose Persist panics with v.
+type atkPanicPersist struct{ v any }
+
+func (s atkPanicPersist) Persist(context.Context) (secret.Secret, error) { panic(s.v) }
+
+// atkHexCookie is a synthetic session cookie value in lowercase hex: the
+// log patterns do not mask it on their own (unlike canaries), so only the
+// panic-value withholding keeps it out of the log.
+const atkHexCookie = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+
+// TestAttack_OrchLoginPanicWithCookieAndPasswordCanaries (J1 T27): during
+// `facto login`, a connector that launched the browser, typed the password
+// and read the OTP panics with values holding the password, the cookie
+// and the OTP (string, error, *http.Cookie, a struct, a panicking
+// Persist). The login is broken, the browser is closed, nothing is saved,
+// and neither the log nor the report holds any of the secrets.
+func TestAttack_OrchLoginPanicWithCookieAndPasswordCanaries(t *testing.T) {
+	t.Parallel()
+	pw := testsecrets.Canary(t, testsecrets.Password)
+	ck := testsecrets.Canary(t, testsecrets.Cookie)
+	otp := testsecrets.Canary(t, testsecrets.Token)
+	values := map[string]func(env connector.Env) any{
+		"string": func(connector.Env) any {
+			return "login failed: password=" + pw + " Set-Cookie: sid=" + ck + "; otp " + otp + " raw " + atkHexCookie
+		},
+		"error": func(connector.Env) any {
+			return fmt.Errorf("cookie sid %s, password %s: %w", atkHexCookie, pw, connector.ErrAuthFailed)
+		},
+		"http cookie": func(connector.Env) any {
+			return &http.Cookie{Name: "sid", Value: atkHexCookie + ck, Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode}
+		},
+		"struct": func(connector.Env) any {
+			return struct{ Password, Cookie, OTP string }{pw, atkHexCookie, otp}
+		},
+	}
+	for name, val := range values {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ev := &events{}
+			pool := &fakePool{ev: ev}
+			sessions := newFakeSessions(ev, true)
+			var logBuf bytes.Buffer
+			log := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			conn := &atkConn{info: atkInfo("login-panic"), login: func(env connector.Env) (connector.Session, error) {
+				b, err := env.Browser.Launch(t.Context(), connector.LaunchOptions{AllowedDomains: []string{"billing.fournisseur.test"}})
+				if err != nil {
+					t.Errorf("Launch: %v", err)
+					return nil, err
+				}
+				if err := b.TypeSecret(t.Context(), "#pass", secret.FromString(pw)); err != nil {
+					t.Errorf("TypeSecret: %v", err)
+				}
+				code, err := env.Prompt.Prompt(t.Context(), connector.PromptRequest{Label: "Code"})
+				if err != nil || code.Expose() != otp {
+					t.Errorf("Prompt = %v", err)
+				}
+				env.Log.Debug("about to panic", "cookie", atkHexCookie)
+				panic(val(env))
+			}}
+			res := orchestrator.Login(t.Context(), orchestrator.Deps{
+				Log: log, Sessions: sessions, Browser: pool, Prompt: atkPrompter{answer: otp},
+			}, conn)
+			if res.State != orchestrator.StateBroken {
+				t.Errorf("state = %s, want broken", res.State)
+			}
+			_, browsers := pool.launched()
+			for _, b := range browsers {
+				if b.closeCount() != 1 {
+					t.Errorf("browser closed %d times after the panic, want 1", b.closeCount())
+				}
+			}
+			if _, saves, _ := sessions.calls(); len(saves) != 0 {
+				t.Errorf("Save called after a panicking Login: %q", saves)
+			}
+			art := testsecrets.ArtifactDir(t)
+			atkSave(t, art, "log.json", logBuf.Bytes())
+			rep := orchestrator.Report{}
+			rep.AddRun(orchestrator.RunResult{Connectors: []orchestrator.ConnectorResult{res}})
+			js, err := rep.JSON()
+			if err != nil {
+				t.Fatal(err)
+			}
+			atkSave(t, art, "report.json", js)
+			atkNoCanary(t, "log", logBuf.Bytes(), pw, ck, otp, atkHexCookie)
+			atkNoCanary(t, "report", append(js, rep.Text()...), pw, ck, otp, atkHexCookie)
+		})
+	}
+
+	t.Run("panicking Persist", func(t *testing.T) {
+		t.Parallel()
+		ev := &events{}
+		sessions := newFakeSessions(ev, true)
+		var logBuf bytes.Buffer
+		log := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		conn := &atkConn{info: atkInfo("persist-panic"), login: func(connector.Env) (connector.Session, error) {
+			return atkPanicPersist{v: "jar " + atkHexCookie + " " + ck}, nil
+		}}
+		res := orchestrator.Login(t.Context(), orchestrator.Deps{Log: log, Sessions: sessions, Browser: &fakePool{ev: ev}, Prompt: atkPrompter{answer: otp}}, conn)
+		if res.State != orchestrator.StateBroken {
+			t.Errorf("state = %s, want broken", res.State)
+		}
+		if _, saves, _ := sessions.calls(); len(saves) != 0 {
+			t.Errorf("Save called after a panicking Persist: %q", saves)
+		}
+		atkSave(t, testsecrets.ArtifactDir(t), "log.json", logBuf.Bytes())
+		atkNoCanary(t, "log", logBuf.Bytes(), ck, atkHexCookie)
+	})
 }

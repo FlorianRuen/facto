@@ -16,7 +16,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/FlorianRuen/facto/internal/logx"
 )
@@ -241,17 +240,6 @@ func TestClean_ParseErrorRegressions(t *testing.T) {
 	}
 }
 
-// linearBudget is the time a 1 MB line may take: 2 s, or 10 s under the race
-// detector, where the linear per-byte loops of Clean (maskBase64 among them)
-// already take about 1 s per MB with coverage on. The quadratic scan this
-// guards against took 87 s per MB without the race detector.
-func linearBudget() time.Duration {
-	if raceBuild {
-		return 10 * time.Second
-	}
-	return 2 * time.Second
-}
-
 // depthUnits returns parse tokens delimited at every escaping depth from 0
 // to 40 backslashes, none of them closed.
 func depthUnits() string {
@@ -263,10 +251,8 @@ func depthUnits() string {
 }
 
 func TestClean_LongLinesAreLinear(t *testing.T) {
-	// Not parallel: a wall-clock budget is only meaningful when the test does
-	// not share the CPU with the package's parallel property tests.
-	const size = 1 << 20
-	for name, unit := range map[string]string{
+	// Not parallel: see assertCleanLinear.
+	assertCleanLinear(t, map[string]string{
 		"parse with colon":     `parse "a": `,
 		"escaped parse quotes": `parse \"`,
 		"URL-looking parse":    `parse "//a@b": `,
@@ -275,22 +261,7 @@ func TestClean_LongLinesAreLinear(t *testing.T) {
 		"escaped port reason":  `invalid port \"`,
 		"reason after URL":     `parse "//a@b": invalid port "`,
 		"every quoting depth":  depthUnits(),
-	} {
-		in := strings.Repeat(unit, size/len(unit))
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			_ = logx.Clean(in)
-		}()
-		timer := time.NewTimer(linearBudget())
-		select {
-		case <-done:
-			timer.Stop()
-		case <-timer.C:
-			t.Errorf("%s: Clean of a 1 MB line still running after %v, want linear time", name, linearBudget())
-			<-done
-		}
-	}
+	})
 }
 
 func TestClean_ParseErrorRegressionsExact(t *testing.T) {

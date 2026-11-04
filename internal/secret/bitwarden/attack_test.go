@@ -19,7 +19,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -96,16 +99,61 @@ func TestAttack_ExecRunnerFloodIsCutAndBounded(t *testing.T) {
 
 // TestAttack_ExecRunnerGrandchildHoldingPipesIsBounded makes the CLI exit
 // at once but leave a background grandchild holding stdout and stderr open:
-// Run must not wait for the grandchild.
+// Run must not wait for the grandchild. The grandchild never exits on its
+// own (sleep 3600); the test kills it only after Run returned, so Run
+// returning at all proves it gave up on the pipes, whatever the machine
+// load (no wall-clock window to race). ErrWaitDelay proves it gave up
+// through the WaitDelay bound, not because the pipes closed. A watchdog
+// kills the grandchild shortly before the test deadline so a regression
+// fails with a message instead of a go test timeout. The bound itself:
+// WaitDelay must stay within the 10 s this test historically allowed, and
+// Run within WaitDelay plus a generous 60 s for start-up under load.
 func TestAttack_ExecRunnerGrandchildHoldingPipesIsBounded(t *testing.T) {
 	t.Parallel()
-	var stdout, stderr bytes.Buffer
-	atkWithin(t, 10*time.Second, "Run with a grandchild holding the pipes", func() {
-		_ = bitwarden.ExecRunner{Path: "/bin/sh"}.Run(t.Context(), bitwarden.Command{
-			Args:   []string{"-c", `sleep 12 & echo '{"status":"unlocked"}'`},
-			Stdout: &stdout, Stderr: &stderr,
+	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
+	var killed atomic.Bool
+	killGrandchild := func() {
+		raw, err := os.ReadFile(pidFile) // #nosec G304 -- test-owned temp file
+		if err != nil {
+			return // the shell never started the grandchild
+		}
+		if pid, err := strconv.Atoi(strings.TrimSpace(string(raw))); err == nil && pid > 0 {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	}
+	t.Cleanup(killGrandchild)
+	if deadline, ok := t.Deadline(); ok {
+		watchdog := time.AfterFunc(time.Until(deadline)*9/10, func() {
+			killed.Store(true)
+			killGrandchild()
 		})
+		t.Cleanup(func() { watchdog.Stop() })
+	}
+
+	if bitwarden.WaitDelay <= 0 || bitwarden.WaitDelay > 10*time.Second {
+		t.Fatalf("WaitDelay = %v, want in (0, 10s]", bitwarden.WaitDelay)
+	}
+
+	budget := bitwarden.WaitDelay + 60*time.Second
+	var overBudget atomic.Bool
+	overTimer := time.AfterFunc(budget, func() { overBudget.Store(true) })
+	defer overTimer.Stop()
+
+	var stdout, stderr bytes.Buffer
+	err := bitwarden.ExecRunner{Path: "/bin/sh"}.Run(t.Context(), bitwarden.Command{
+		Args:   []string{"-c", `sleep 3600 & echo $! > '` + pidFile + `'; echo '{"status":"unlocked"}'`},
+		Stdout: &stdout, Stderr: &stderr,
 	})
+	tooSlow := overBudget.Load()
+	if killed.Load() {
+		t.Fatalf("Run returned only once the grandchild was killed: it waited for the pipes (err = %v)", err)
+	}
+	if !errors.Is(err, exec.ErrWaitDelay) {
+		t.Fatalf("Run with a grandchild holding the pipes: err = %v, want exec.ErrWaitDelay", err)
+	}
+	if tooSlow {
+		t.Fatalf("Run took over %v with a grandchild holding the pipes, want at most WaitDelay (%v) + 60s", budget, bitwarden.WaitDelay)
+	}
 }
 
 // TestAttack_ExecRunnerHostileParentEnvironmentNotInherited sets variables

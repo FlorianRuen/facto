@@ -13,6 +13,7 @@ import (
 
 	"github.com/FlorianRuen/facto/internal/connector"
 	"github.com/FlorianRuen/facto/internal/httpx"
+	"github.com/FlorianRuen/facto/internal/logx"
 	"github.com/FlorianRuen/facto/internal/normalize"
 )
 
@@ -51,6 +52,9 @@ type ConnectorResult struct {
 	ID        string
 	State     State
 	Documents []DocResult // Source == ID, in listing order
+	// Notes are fixed orchestrator texts for the user (never error text or
+	// supplier data), e.g. the `facto login <id>` hint of needs_login.
+	Notes []string
 }
 
 // RunResult is the outcome of Run.
@@ -74,13 +78,30 @@ var errNilSource = errors.New("orchestrator: nil connector source")
 // Run collects p from every connector of src.All(), sequentially, in that
 // order. Per connector: connector.ValidateInfo (failure: broken, never
 // logged in); Env{HTTP: Deps.NewHTTP(Info.AllowedDomains) (error: broken,
-// never logged in), Log: the redacting logger tagged connector=<id>}; Login;
+// never logged in), Log: the redacting logger tagged connector=<id>,
+// Secrets: Deps.Secrets}; Login;
 // List(session, p); then for each listed ref: a ProviderID validProviderID
 // refuses (a URL, a query, a token, whitespace or control characters, over
 // 128 bytes) is StatusInvalid, with no ProviderID, never fetched, indexed,
 // named or logged; otherwise normalize.BeforeFetch (a known
 // ProviderID is StatusSkippedKnownID and never fetched, a lookup error
 // StatusFailed), Fetch, Ingest, close the body.
+//
+// Sessions and browser (Deps.Sessions, Deps.Browser): when Sessions is
+// Persistent, the saved session is Loaded once before Login and handed over
+// as Env.Saved, wiped once Login returns (vault.ErrNoSession is silent, any
+// other Load error is one warning and the session is kept). Env.Browser is a
+// login-only wrapper of Deps.Browser: it launches with Info.AllowedDomains,
+// whatever the connector asks; when Login returns (or panics) it closes
+// every browser still open (one warning) and refuses later launches. After
+// a successful Login a connector.Persistable session is Persisted and
+// Saved (fsx.ErrNotDurable counts as saved; any other failure is a warning
+// and the note "session not saved", never a connector failure). When a
+// restored session makes Login or List fail with ErrNeedsLogin or
+// ErrAuthFailed, it is Deleted and the state is needs_login. Every
+// needs_login result notes `facto login <id>`; every auth_failed result (the
+// credentials, not a restored session, were rejected) notes
+// `facto config <id>`.
 //
 // Login and List errors end the connector with the state of the sentinel
 // they wrap (errors.Is), anything else broken. A Fetch error wrapping a
@@ -117,6 +138,22 @@ func (o *Orchestrator) Run(ctx context.Context, src Connectors, p connector.Peri
 		return out, fmt.Errorf("run: %w", err)
 	}
 	return out, nil
+}
+
+// Login runs one fresh login of c for `facto login <id>`: as Run does for
+// one connector (ValidateInfo, Env with Deps.NewHTTP, the redacting logger,
+// Deps.Secrets, Deps.Prompt, Deps.Credentials and the login-only browser;
+// panics recovered; cancellation is StateInterrupted), except that no saved
+// session is loaded (Env.Saved is zero), and that it stops once a
+// connector.Persistable session has been Persisted and Saved: List and
+// Fetch are never called. Index, Dest and Namer are not needed and not
+// checked. A Login error ends in the state of the sentinel it wraps,
+// anything else broken; a failed save is a warning and a note, the state
+// stays ok.
+func Login(ctx context.Context, d Deps, c connector.Connector) ConnectorResult {
+	o := build(d)
+	o.loginOnly = true
+	return o.runConnector(ctx, 0, c, connector.Period{})
 }
 
 // connRun is the state of one connector while it runs. It is what the panic
@@ -222,22 +259,41 @@ func (o *Orchestrator) runSteps(ctx context.Context, c connector.Connector, p co
 		o.fail(ctx, cr, StateBroken, err)
 		return
 	}
-	env := connector.Env{HTTP: client, Log: cr.log}
+	env := connector.Env{
+		HTTP:        client,
+		Log:         cr.log,
+		Secrets:     o.secrets,
+		Prompt:      o.prompt,
+		Interactive: o.prompt != nil && o.prompt.Interactive(),
+		Credentials: o.creds[info.ID],
+	}
+	var lb *loginBrowser
+	if o.browser != nil {
+		lb = newLoginBrowser(o.browser, info.AllowedDomains)
+		env.Browser = lb
+	}
+	if !o.loginOnly {
+		env.Saved = o.restore(ctx, cr, info.ID)
+	}
+	restored := !env.Saved.IsZero()
 
-	cr.phase = phaseLogin
-	sess, err := c.Login(ctx, env)
+	sess, err := o.login(ctx, cr, c, env, lb)
 	if err != nil {
-		o.stepFailed(ctx, cr, err)
+		o.stepFailed(ctx, cr, o.rejected(ctx, cr, info.ID, restored, err), err)
 		return
 	}
 	if ctx.Err() != nil {
+		return
+	}
+	o.save(ctx, cr, info.ID, sess)
+	if o.loginOnly {
 		return
 	}
 
 	cr.phase = phaseList
 	refs, err := c.List(ctx, sess, p)
 	if err != nil {
-		o.stepFailed(ctx, cr, err)
+		o.stepFailed(ctx, cr, o.rejected(ctx, cr, info.ID, restored, err), err)
 		return
 	}
 
@@ -397,22 +453,48 @@ func isBase64URL(c byte) bool {
 
 // stepFailed ends the connector after a Login or List error. An error
 // caused by the run's cancellation is not a connector state: Run reports
-// the cancellation itself.
-func (o *Orchestrator) stepFailed(ctx context.Context, cr *connRun, err error) {
+// the cancellation itself. rejected (a restored session the supplier
+// refused, already dropped) makes the state needs_login, whatever sentinel
+// the connector used: the session, not the credentials, was rejected.
+func (o *Orchestrator) stepFailed(ctx context.Context, cr *connRun, rejected bool, err error) {
 	if ctx.Err() != nil {
 		return
 	}
 	st, ok := sentinelState(err)
-	if !ok {
+	switch {
+	case rejected:
+		st = StateNeedsLogin
+	case !ok:
 		st = StateBroken
 	}
 	o.fail(ctx, cr, st, err)
 }
 
-// fail sets the connector state and logs it through the redacting logger.
-// The error text never reaches the result.
+// errAttr is how every orchestrator log line carries an error: its text,
+// cleaned by logx.Clean at the call site, as a plain string. The raw error
+// value never reaches a handler, so nothing wrapped in the chain (a value a
+// connector quoted, a credential reference) depends on the handler's own
+// redaction to stay out of the log (CodeQL #14).
+func errAttr(err error) slog.Attr {
+	if err == nil {
+		return slog.String("error", "")
+	}
+	return slog.String("error", logx.Clean(err.Error()))
+}
+
+// fail sets the connector state, adds the fixed note of needs_login
+// (`facto login <id>`) or auth_failed (`facto config <id>`), and logs it
+// through the redacting logger. The error text never reaches the result.
 func (o *Orchestrator) fail(ctx context.Context, cr *connRun, st State, err error) {
 	cr.res.State = st
+	switch st {
+	case StateNeedsLogin:
+		cr.res.Notes = append(cr.res.Notes, loginNote(cr.res.ID))
+	case StateAuthFailed:
+		cr.res.Notes = append(cr.res.Notes, configNote(cr.res.ID))
+	case StateOK, StateBroken, StateRateLimited, StateInterrupted:
+		// No fixed hint: the report state says it all.
+	}
 	level := slog.LevelWarn
 	if st == StateBroken {
 		level = slog.LevelError
@@ -420,7 +502,7 @@ func (o *Orchestrator) fail(ctx context.Context, cr *connRun, st State, err erro
 	cr.log.LogAttrs(ctx, level, "connector stopped",
 		slog.String("phase", cr.phase),
 		slog.String("state", string(st)),
-		slog.Any("error", err))
+		errAttr(err))
 }
 
 // docFailed logs a document the connector loop could not hand to Ingest,
@@ -430,7 +512,7 @@ func (o *Orchestrator) docFailed(ctx context.Context, cr *connRun, d DocResult, 
 		slog.String("phase", cr.phase),
 		slog.String("provider_id", d.ProviderID),
 		slog.String("status", string(d.Status)),
-		slog.Any("error", err))
+		errAttr(err))
 }
 
 // sentinelState maps a connector sentinel (errors.Is) to its state.

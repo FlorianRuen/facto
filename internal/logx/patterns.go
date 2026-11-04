@@ -29,17 +29,33 @@ const minTokenRun = 16
 // net/url parse errors (see maskParseErrors), JWTs, long base64 runs,
 // then the userinfo of URLs of any scheme (removed) and query/fragment (replaced by "?***"),
 // then the value following a sensitive key or an authorization scheme in
-// free text (see maskKeyValues).
+// free text (see maskKeyValues). When that last step changed a text holding
+// a URL, the URL patterns and it run once more: a mask may have swallowed
+// the "/", "?" or "#" that ended an authority, letting the userinfo pattern
+// reach a later "@", and a second Clean must change nothing.
 // File names, slugs, UUIDs, paths, hex digests and plain words survive.
 func Clean(s string) string {
 	s = maskParseErrors(s)
 	s = jwtRe.ReplaceAllLiteralString(s, Mask)
 	s = maskBase64(s)
-	if strings.Contains(s, "://") { // both URL patterns need it
-		s = userinfoRe.ReplaceAllString(s, "$1")
-		s = urlRe.ReplaceAllStringFunc(s, cleanURL)
+	s = maskURLs(s)
+	out := maskKeyValues(s)
+	if out != s && strings.Contains(out, "://") {
+		if again := maskURLs(out); again != out {
+			out = maskKeyValues(again)
+		}
 	}
-	return maskKeyValues(s)
+	return out
+}
+
+// maskURLs removes the userinfo of URLs of any scheme and replaces their
+// query and fragment by "?***".
+func maskURLs(s string) string {
+	if !strings.Contains(s, "://") { // both URL patterns need it
+		return s
+	}
+	s = userinfoRe.ReplaceAllString(s, "$1")
+	return urlRe.ReplaceAllStringFunc(s, cleanURL)
 }
 
 // isB64 reports whether c belongs to the standard or URL-safe base64
@@ -505,7 +521,19 @@ func maskParseArg(arg string) string {
 			return Mask
 		}
 	}
+	if !keptByLaterPatterns(tail) {
+		return Mask
+	}
 	return Mask + "@" + tail + query
+}
+
+// keptByLaterPatterns reports whether the patterns Clean applies after the
+// parse errors leave tail unchanged. A tail they would mask in part (a
+// token-like run, a key and its value) is masked whole instead: the "*" they
+// leave is no host or path byte, so a second Clean would mask the whole
+// argument anyway (Clean must be idempotent; masks only grow).
+func keptByLaterPatterns(tail string) bool {
+	return !jwtRe.MatchString(tail) && maskBase64(tail) == tail && maskKeyValues(tail) == tail
 }
 
 // isHostPathByte reports whether c may appear, unescaped, in the host, port

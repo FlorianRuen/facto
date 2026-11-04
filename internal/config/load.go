@@ -93,6 +93,9 @@ func Parse(data []byte, opts Options) (*Config, error) {
 	if cfg.StateDir, err = expandHome(cfg.StateDir, cfg.home, "state_dir"); err != nil {
 		return nil, err
 	}
+	if cfg.Browser.Path, err = expandBrowserPath(cfg.Browser.Path, cfg.home); err != nil {
+		return nil, err
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}

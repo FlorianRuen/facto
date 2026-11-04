@@ -1,0 +1,65 @@
+name: fakeprovider-browser-allowlist
+description: >
+  J1 T24, A11. Every login page of the fake site tries to reach the
+  off-allowlist evil.test through each kind of subresource: an img, a
+  fetch, a WebSocket and a fetch from inside a same-origin dedicated worker
+  (/login/worker.js); the form is revealed only once all of them settled.
+  The browser blocks every one: zero requests reach evil.test (request
+  log), while the worker script itself, on the allowed host, is loaded
+  (the hostile page really ran) and the login still succeeds. The count of
+  blocked hosts (browser.Page.BlockedHosts) is not exposed outside the
+  binary, so the request log is the proof. All values are synthetic.
+setup:
+  - path: config.yaml
+    content: |
+      output:
+        local: ~/Invoices
+      state_dir: ~/.facto
+      notify: none
+      sessions: ephemeral
+      connectors:
+        fakeprovider:
+          enabled: true
+          category: services
+          login: e2e://fp/login
+          password: e2e://fp/password
+args: [collect, --config, "{{home}}/config.yaml", --year, "2026", --non-interactive]
+fakesite:
+  mode: password
+  login: fp/login
+  password: fp/password
+  invoices:
+    - { id: FP-2026-0001, contract: C-1, issued_at: 2026-03-14, amount_cents: 8412, currency: EUR, fixture: edf-invoice.pdf }
+secrets:
+  fp/login: "user-{{canary:token}}"
+  fp/password: "{{canary:password}}"
+expect:
+  exit: 0
+  stdout:
+    contains:
+      - "- ok fakeprovider"
+      - "summary: filed 1"
+  files:
+    - path: Invoices/2026/services/fakeprovider/2026-03-14_fakeprovider_invoice_84-12EUR_fp-2026-0001.pdf
+      mode: "0600"
+      fixture: edf-invoice.pdf
+  absent:
+    - .config/google-chrome-for-testing
+  trees:
+    - path: Invoices
+      private: true
+    - path: .facto
+      private: true
+    - path: .facto/tmp
+      private: true
+      entries: []
+  requests:
+    - { host: evil.test, count: 0 }
+    # The hostile page ran: its same-origin worker was fetched.
+    - { method: GET, host: www.fakeprovider.test, path: /login/worker.js, min: 1 }
+    - { method: GET, host: www.fakeprovider.test, path: /login, count: 1 }
+    - { method: POST, host: www.fakeprovider.test, path: /login, count: 1 }
+    - { method: GET, host: www.fakeprovider.test, path: /account, count: 1 }
+    - { method: GET, host: www.fakeprovider.test, path: /api/invoices/FP-2026-0001/pdf, count: 1 }
+    - { host: sso.fakeprovider.test, count: 0 }
+  browser: { no_cdp_port: true, profile_removed: true }

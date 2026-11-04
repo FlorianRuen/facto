@@ -18,7 +18,8 @@
 ## Setup
 
 You need Go (version pinned in `go.mod`), `gofumpt` and `golangci-lint` on your
-`PATH`, and Docker for `make e2e`.
+`PATH`, and Docker for `make e2e`. `make chrome` and `make e2e` also need
+network access once, to download the pinned Chrome for Testing (Linux x86-64).
 
 Install the pinned security and CI tools (govulncheck, gosec, gitleaks,
 osv-scanner, actionlint) into `GOBIN`:
@@ -34,27 +35,50 @@ If a target is missing, add it to the Makefile.
 
 | Command | What it does |
 | --- | --- |
-| `make verify` | fmt check, lint, unit tests with `-race`, coverage gates, leakcheck. Must exit 0 before any commit. |
+| `make verify` | fmt check, lint, `lint-selftest`, unit tests with `-race`, coverage gates, `e2e-unit`, `release-e2e-check`, leakcheck. Must exit 0 before any commit. |
 | `make test` | Unit tests only, fast |
-| `make e2e` | End-to-end tests against `connectors/fakeprovider` and a Vaultwarden container |
+| `make chrome` | Runs `facto browser install --dir .cache/chrome`: the pinned Chrome for Testing, verified by size and SHA-256. Idempotent, no network once installed. Prints the executable path |
+| `make e2e` | Runs `make chrome`, then the real-Chrome browser tests (`-tags e2e,chrome ./internal/browser/...`), then the scenarios in `test/e2e/` against `connectors/fakeprovider` and a Vaultwarden container |
+| `make e2e-unit` | Unit tests with `-race -tags e2e`, in every package that holds a file whose `//go:build` line names `e2e` (`test/e2e` excluded). Never needs Chrome. Run by `verify` |
+| `make release-e2e-check` | Builds with the exact `.goreleaser.yaml` flags and fails if `go list -deps` or `go tool nm` finds e2e-only code; a `-tags e2e` self-test must find it. Prints `release-check: release build has no e2e-only code`. Run by `verify` |
+| `make lint-selftest` | Proves three guard rules are live: the depguard ban on `golang.org/x/crypto/openpgp`, the `cdploopback` caller rule and the `httpx.NewPinned` caller rule. Prints one `lint-selftest:` line per rule. Run by `verify` |
+| `make e2e-browser-windows` | Windows only: the real-Chrome checks `TestChromeWindows_*` (CDP port bound to 127.0.0.1 only, profile removed, browser closed after login). Same command as the `browser-windows` CI job |
+| `make cover` | Unit tests with `-race`, then the coverage gates |
 | `make leakcheck` | Canary secret scan over every file, log and report produced by the tests |
 | `make audit` | govulncheck, gosec, gitleaks, osv-scanner; writes `security/scanners.json` |
 | `make score-check` | Fails if `security/score.json` is missing, stale or under the gate |
+| `make release-check` | Validates `.goreleaser.yaml` and builds an unsigned snapshot of every target, in the pinned goreleaser image (Docker) |
 | `make tools` | Installs the pinned tools listed above |
 
 Coverage gates: every package needs 70%. `internal/normalize`, `internal/store`,
-`internal/secret`, `internal/vault`, `internal/fsx` and `internal/httpx` need 85%.
+`internal/secret`, `internal/vault`, `internal/fsx`, `internal/httpx`,
+`internal/browser` and `internal/browser/cft` need 85%.
+
+### Build tags
+
+- `e2e`: test-only code (the `fakeprovider` registration, e2e secret and key
+  stores, loopback and test CA plumbing). Never in a release build:
+  `make release-e2e-check` proves it.
+- `chrome` (with `e2e`): tests that drive a real Chrome. They read the browser
+  path from `FACTO_E2E_CHROME`. On Linux they fall back to the `make chrome`
+  copy in `.cache/chrome`; on Windows there is no fallback. Without a browser
+  they fail, never skip. Only `make e2e` and `make e2e-browser-windows` pass
+  this tag.
 
 ## End-to-end tests
 
 `make e2e` needs Docker with Compose v2 (`docker compose`). It:
 
-1. starts the Vaultwarden service of `test/compose.yaml` and waits for its
+1. runs `make chrome` (pinned Chrome for Testing in `.cache/chrome`);
+2. runs the real-Chrome isolation tests in `internal/browser` with
+   `-tags e2e,chrome` and `FACTO_E2E_CHROME` set to that Chrome. They print
+   `no listening CDP port` and `profile removed`;
+3. starts the Vaultwarden service of `test/compose.yaml` and waits for its
    healthcheck;
-2. runs `go test -tags e2e -count=1 -v ./test/e2e/...`, which builds
-   `./cmd/facto` once and runs every `test/e2e/*.yaml` scenario as the subtest
-   `TestE2E/<name>`;
-3. stops the container and removes its volumes, then exits with the test
+4. runs `go test -tags e2e -count=1 -v ./test/e2e/...`, which builds
+   `./cmd/facto` once with `-tags e2e` and runs every `test/e2e/*.yaml`
+   scenario as the subtest `TestE2E/<name>`;
+5. stops the container and removes its volumes, then exits with the test
    status.
 
 ```sh
@@ -66,14 +90,21 @@ of the state dir of each run go to `.cache/test-artifacts/`, where
 `make leakcheck` scans them.
 
 Vaultwarden is pinned by tag and digest. It listens on `127.0.0.1:8087` only, in
-a tmpfs, with synthetic accounts. No J0 scenario uses it yet: the Bitwarden
-provider E2E comes in J1. To bump it, follow the comment at the top of
-`test/compose.yaml`.
+a tmpfs, with synthetic accounts. No scenario uses it yet: the Bitwarden
+provider E2E needs the `bw` CLI in the e2e job (BLOCKED(H1)). To bump it,
+follow the comment at the top of `test/compose.yaml`.
 
 Each scenario runs the binary in its own sandbox: a temporary `HOME`, an
 environment built from scratch (`HOME`, `XDG_*`, `APPDATA`, `TMPDIR`,
-`LANG=C.UTF-8`, `TZ=UTC`) and an empty `PATH`, so the binary cannot run any host
-tool. Stdin is `/dev/null`, so `collect` never prompts.
+`LANG=C.UTF-8`, `TZ=UTC`, and a `DBUS_SESSION_BUS_ADDRESS` inside the sandbox)
+and an empty `PATH`, so the binary cannot run any host tool or reach your
+keyring. Stdin is `/dev/null`, so `collect` never prompts, unless the scenario
+sets `stdin:`.
+
+The `fakeprovider` scenarios start a fake TLS site bound to 127.0.0.1, with a
+per-run test CA. facto, built with `-tags e2e`, maps the fake supplier's hosts
+to it in httpx and in Chrome. Session keys go to a file store in the sandbox's
+state dir, never to the OS keyring.
 
 ### Adding a scenario
 
@@ -137,6 +168,12 @@ Format reminders:
 - `repeat` runs the same command a second time; `unchanged` lists trees that
   must be identical (paths, modes, bytes) after it.
 - `state_dir` (default `.facto`) is the folder copied to the artifacts.
+- Fake site keys: `fakesite:` (mode, accepted login and password keys, seeded
+  invoices), `secrets:` (`e2e://<item>/<field>` values, outside `HOME`),
+  `stdin:` (lines fed to prompts; sets `FACTO_E2E_INTERACTIVE=1`),
+  `expect.requests:` (assertions on the site's request log) and
+  `expect.browser:` (`no_cdp_port`, `profile_removed`). See
+  `test/e2e/scenario.go`.
 
 Fixtures are files in `test/e2e/testdata/`, referenced by bare name. They must
 be synthetic: the existing PDFs are generated byte for byte by
@@ -176,7 +213,10 @@ Fixtures in `testdata/` must be synthetic or sanitized. Follow
 
 ## Adding a connector
 
-Connectors are planned from milestone J2. The commands below do not exist yet.
+Connectors are planned from milestone J2. The `facto record` and `facto doctor`
+commands below do not exist yet. `connectors/fakeprovider` and its sheet
+[`docs/connectors/fakeprovider.md`](docs/connectors/fakeprovider.md) show the
+shape of a connector with a browser login.
 
 1. Record: `facto record <portal-url>` (strips passwords, cookies, auth headers).
 2. Sanitize: follow `.claude/skills/fixtures-from-har/SKILL.md`.

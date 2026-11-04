@@ -1,0 +1,4 @@
+go test fuzz v1
+string("password=Secret:Basic")
+string("")
+byte('0')
