@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,8 +51,18 @@ func TestInstall_ExtractsVerifiedArchive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Lstat(executable): %v", err)
 	}
-	if !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o700 {
+	// Lstat: a symlink is never a regular file.
+	if !fi.Mode().IsRegular() {
+		t.Fatalf("executable mode = %v, want a regular file", fi.Mode())
+	}
+	// POSIX permission bits only exist on unix: Windows reports 0666 for
+	// every regular file (SEC-J0-18).
+	if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o700 {
 		t.Fatalf("executable mode = %v, want a regular 0700 file", fi.Mode())
+	}
+	body, err := os.ReadFile(filepath.Clean(exe))
+	if err != nil || string(body) != "#!/bin/sh\n# synthetic chrome\n" {
+		t.Fatalf("executable content = %q, %v; want the archive's chrome entry", body, err)
 	}
 	marker, err := os.ReadFile(filepath.Clean(filepath.Join(dir, testVersion, cft.MarkerName)))
 	if err != nil {

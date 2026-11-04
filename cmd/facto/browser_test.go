@@ -57,7 +57,14 @@ func assertPrivateDir(t *testing.T, dir string) {
 	if err != nil {
 		t.Fatalf("Lstat(%s): %v", dir, err)
 	}
-	if !fi.IsDir() || fi.Mode().Perm() != 0o700 {
+	// Lstat: a symlink (or a Windows junction / mount point) is never a
+	// ModeDir type, so this also refuses a redirected directory.
+	if fi.Mode().Type() != fs.ModeDir {
+		t.Fatalf("%s mode = %v, want a real directory (not a symlink)", dir, fi.Mode())
+	}
+	// POSIX permission bits only exist on unix; on Windows fsx cannot set
+	// them (SEC-J0-18) and os reports 0777 for every directory.
+	if isUnix() && fi.Mode().Perm() != 0o700 {
 		t.Fatalf("%s mode = %v, want a 0700 directory", dir, fi.Mode())
 	}
 }

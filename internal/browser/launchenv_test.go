@@ -24,6 +24,7 @@ package browser_test
 
 import (
 	"errors"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -39,6 +40,9 @@ func TestBuildLaunchEnv_PrivateDirs(t *testing.T) {
 		"XDG_CONFIG_HOME": "/facto-test/home/.config", "XDG_CACHE_HOME": "/facto-test/home/.cache",
 		"XDG_DATA_HOME": "/facto-test/home/.local/share", "XDG_STATE_HOME": "/facto-test/home/.local/state",
 	}
+	// An absolute path in the host's syntax (BuildLaunchEnv targets the
+	// host): C:\...\t1.1 on Windows, /.../t1.1 elsewhere.
+	area := filepath.Join(t.TempDir(), "t1.1")
 	tests := []struct {
 		name          string
 		private, tmp  string
@@ -47,8 +51,8 @@ func TestBuildLaunchEnv_PrivateDirs(t *testing.T) {
 		wantCache     string
 		wantNoXDGKeys bool
 	}{
-		{name: "private area and its TMPDIR", private: "/b/t1.1", tmp: "/b/t1.1", wantTMP: "/b/t1.1", wantConfig: "/b/t1.1/config", wantCache: "/b/t1.1/cache"},
-		{name: "private area, inherited TMPDIR", private: "/b/t1.1", wantTMP: "/facto-test/tmp", wantConfig: "/b/t1.1/config", wantCache: "/b/t1.1/cache"},
+		{name: "private area and its TMPDIR", private: area, tmp: area, wantTMP: area, wantConfig: filepath.Join(area, "config"), wantCache: filepath.Join(area, "cache")},
+		{name: "private area, inherited TMPDIR", private: area, wantTMP: "/facto-test/tmp", wantConfig: filepath.Join(area, "config"), wantCache: filepath.Join(area, "cache")},
 		{name: "nothing private", wantTMP: "/facto-test/tmp", wantNoXDGKeys: true},
 	}
 	for _, tt := range tests {
@@ -72,10 +76,10 @@ func TestBuildLaunchEnv_PrivateDirs(t *testing.T) {
 				t.Errorf("XDG_CONFIG_HOME/XDG_CACHE_HOME = %q/%q, want %q/%q",
 					got["XDG_CONFIG_HOME"], got["XDG_CACHE_HOME"], tt.wantConfig, tt.wantCache)
 			}
-			if want := tt.private + "/data"; got["XDG_DATA_HOME"] != want {
+			if want := filepath.Join(tt.private, "data"); got["XDG_DATA_HOME"] != want {
 				t.Errorf("XDG_DATA_HOME = %q, want %q", got["XDG_DATA_HOME"], want)
 			}
-			if want := tt.private + "/state"; got["XDG_STATE_HOME"] != want {
+			if want := filepath.Join(tt.private, "state"); got["XDG_STATE_HOME"] != want {
 				t.Errorf("XDG_STATE_HOME = %q, want %q", got["XDG_STATE_HOME"], want)
 			}
 		})
@@ -113,6 +117,18 @@ func dirOfLen(n int) string {
 	return p + strings.Repeat("d", n-len(p))
 }
 
+// linuxProfileDir is a profile dir in the path syntax of a linux target
+// (Options.GOOS "linux"): the host's t.TempDir() on unix hosts; on a
+// Windows host, whose temp dir is C:\..., a slash-rooted path (Prepare
+// only checks its syntax and never touches it).
+func linuxProfileDir(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return "/facto-test/profile"
+	}
+	return t.TempDir()
+}
+
 // TestPrepare_InheritedTMPDIRSocketLimit: with no private area (Prepare's
 // public options), the TMPDIR facto inherited is what Chrome gets: one that
 // leaves the SingletonSocket path over 107 bytes fails with
@@ -137,6 +153,7 @@ func TestPrepare_InheritedTMPDIRSocketLimit(t *testing.T) {
 			h.LookupEnv = mapLookup(tt.env)
 			o := launchOpts(t)
 			o.GOOS = "linux"
+			o.ProfileDir = linuxProfileDir(t)
 			_, err := browser.Prepare(h, o)
 			if !tt.wantErr {
 				if err != nil {

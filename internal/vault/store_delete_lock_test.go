@@ -7,8 +7,10 @@ package vault_test
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -33,7 +35,13 @@ func TestStore_DeleteWithoutSessionsDirTakesLock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sessions dir not created by Delete: %v", err)
 	}
-	if !fi.IsDir() || fi.Mode().Perm() != 0o700 {
+	// Lstat: a symlink (or a Windows junction) is never a ModeDir type.
+	if fi.Mode().Type() != fs.ModeDir {
+		t.Fatalf("sessions dir mode = %v, want a real directory (not a symlink)", fi.Mode())
+	}
+	// POSIX permission bits only exist on unix; on Windows fsx cannot set
+	// them (SEC-J0-18) and os reports 0777 for every directory.
+	if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o700 {
 		t.Fatalf("sessions dir mode = %v, want a 0700 directory", fi.Mode())
 	}
 	if !exists(t, filepath.Join(sessDir, "edf.lock")) {

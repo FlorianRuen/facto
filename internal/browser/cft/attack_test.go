@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -30,7 +31,17 @@ import (
 func assertInside(t *testing.T, e unzipEnv) {
 	t.Helper()
 	e.assertOutsideUntouched(t)
-	err := filepath.WalkDir(e.dst, func(p string, d fs.DirEntry, err error) error {
+	// Walk relative to an os.Root on dst: each step opens one component
+	// (openat), so a deep tree the extraction legitimately wrote (600
+	// nested dirs) is walked whole even where its absolute path is over
+	// PATH_MAX (1024 bytes on macOS). The Root never follows a symlink out
+	// of dst, and WalkDir never descends into one.
+	root, err := os.OpenRoot(e.dst)
+	if err != nil {
+		t.Fatalf("open dst root: %v", err)
+	}
+	defer func() { _ = root.Close() }() // read-only
+	err = fs.WalkDir(root.FS(), ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -44,6 +55,28 @@ func assertInside(t *testing.T, e unzipEnv) {
 	})
 	if err != nil {
 		t.Fatalf("walk dst: %v", err)
+	}
+}
+
+// assertEntryInside fails unless name (slash-separated, relative to dst) is
+// a regular file holding want, reached without following any symlink.
+func assertEntryInside(t *testing.T, e unzipEnv, name, want string) {
+	t.Helper()
+	root, err := os.OpenRoot(e.dst)
+	if err != nil {
+		t.Fatalf("open dst root: %v", err)
+	}
+	defer func() { _ = root.Close() }() // read-only
+	fi, err := root.Lstat(filepath.FromSlash(name))
+	if err != nil {
+		t.Fatalf("accepted entry %.60q not inside dst: %v", name, err)
+	}
+	if !fi.Mode().IsRegular() {
+		t.Fatalf("accepted entry %.60q mode %v, want a regular file", name, fi.Mode())
+	}
+	b, err := fs.ReadFile(root.FS(), name)
+	if err != nil || string(b) != want {
+		t.Fatalf("accepted entry %.60q = %q, %v; want %q", name, b, err, want)
 	}
 }
 
@@ -87,6 +120,12 @@ func TestAttack_CFTZipSlipLookalikeAndEncodedNames(t *testing.T) {
 				return
 			}
 			assertInside(t, e)
+			if err == nil {
+				// Accepted: the entry is a plain file at its cleaned name
+				// inside dst (read through a Root, so a deep entry is
+				// reached whatever PATH_MAX is).
+				assertEntryInside(t, e, path.Clean(n), "pwned")
+			}
 		})
 	}
 }
