@@ -160,10 +160,16 @@ func atkPanicChild(mode string) {
 	case "error":
 		val = fmt.Errorf("login failed with %v: %w", s, errors.New("supplier refused"))
 	case "goroutine":
+		// done is closed only if atkHold returns without panicking. It must
+		// not be a deferred close: deferred calls run while the panic
+		// unwinds, before the runtime prints it and exits with status 2, so
+		// this goroutine would wake up, the test would pass and testmain's
+		// os.Exit(0) could win the race (a child exiting 0 without a panic).
+		// On a real panic this goroutine stays blocked until the crash.
 		done := make(chan struct{})
 		go func() {
-			defer close(done)
 			atkHold(s, s.Expose(), "connector goroutine crashed")
+			close(done)
 		}()
 		<-done
 		return
