@@ -454,12 +454,19 @@ type capWriter struct {
 }
 
 func (w *capWriter) Write(b []byte) (int, error) {
-	if w.over || len(w.buf)+len(b) > MaxOutput {
+	// len(w.buf) <= MaxOutput always holds, so the subtraction cannot wrap and
+	// the sums below are only computed once len(b) is known to be small.
+	if w.over || len(b) > MaxOutput-len(w.buf) {
 		w.over = true
 		return 0, ErrOutputTooLarge
 	}
 	if need := len(w.buf) + len(b); need > cap(w.buf) {
-		grown := make([]byte, len(w.buf), min(max(2*cap(w.buf), need, 512), MaxOutput))
+		// need <= MaxOutput here; doubling is only taken when it cannot exceed it.
+		newCap := min(max(need, 512), MaxOutput)
+		if cap(w.buf) <= MaxOutput/2 {
+			newCap = min(max(2*cap(w.buf), need, 512), MaxOutput)
+		}
+		grown := make([]byte, len(w.buf), newCap)
 		copy(grown, w.buf)
 		clear(w.buf)
 		w.buf = grown
