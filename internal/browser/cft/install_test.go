@@ -394,10 +394,16 @@ func TestInstall_Idempotent(t *testing.T) {
 	}
 }
 
-// writeRaw writes content to path (0600) through fsx.
+// writeRaw writes content to path (0600) through fsx. The directory handle
+// is closed before returning: Windows refuses to rename a directory with
+// an open handle on it, and Install renames <Version>/ on a reinstall.
 func writeRaw(t *testing.T, path, content string) {
 	t.Helper()
-	r := openFsx(t, filepath.Dir(path))
+	r, err := fsx.Open(filepath.Dir(path))
+	if err != nil {
+		t.Fatalf("fsx.Open(%q): %v", filepath.Dir(path), err)
+	}
+	defer func() { _ = r.Close() }() // directory handle; WriteAtomic already synced
 	if err := r.WriteAtomic(t.Context(), filepath.Base(path), []byte(content)); err != nil {
 		t.Fatalf("setup WriteAtomic(%q): %v", path, err)
 	}
