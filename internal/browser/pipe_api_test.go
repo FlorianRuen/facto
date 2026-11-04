@@ -264,3 +264,19 @@ func TestPipeTransport_RawNULNeverWritten(t *testing.T) {
 		t.Errorf("wire = %q, want %q (one frame, one NUL)", wire.String(), want)
 	}
 }
+
+func TestPipeSendRefusesOversizedMessage(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	tr := browser.NewPipeTransport(strings.NewReader(""), &out)
+	err := tr.Send(bytes.Repeat([]byte("a"), browser.MaxMessageBytes+1))
+	if !errors.Is(err, browser.ErrMessageTooLarge) {
+		t.Fatalf("Send(MaxMessageBytes+1) = %v, want ErrMessageTooLarge", err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("%d bytes written for a refused message, want 0", out.Len())
+	}
+	if err := tr.Send(bytes.Repeat([]byte("a"), browser.MaxMessageBytes)); err != nil {
+		t.Errorf("Send(MaxMessageBytes) = %v, want nil", err)
+	}
+}

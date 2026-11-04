@@ -74,6 +74,9 @@ func (t *PipeTransport) Send(msg []byte) error {
 	if bytes.IndexByte(msg, 0) >= 0 {
 		return fmt.Errorf("%w: outgoing message holds a raw NUL", ErrBadFrame)
 	}
+	if len(msg) > MaxMessageBytes {
+		return fmt.Errorf("%w: outgoing message over %d bytes", ErrMessageTooLarge, MaxMessageBytes)
+	}
 	frame := make([]byte, len(msg)+1)
 	copy(frame, msg)
 	// The frame may hold a value exposed at the last call site: cleared once
