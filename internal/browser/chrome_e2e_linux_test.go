@@ -618,7 +618,9 @@ func runE2EMode(mode string) int {
 
 // runChromeOwner plays facto: a Pool on FACTO_E2E_STATE launches the real
 // Chrome with the production starter, prints "profile=<dir>" and waits to
-// be SIGKILLed (no cleanup code runs).
+// be SIGKILLed (no cleanup code runs). Its context has no deadline: the
+// Launch context bounds the browser's lifetime, and only the parent's
+// death may end it here.
 func runChromeOwner() int {
 	ctx := context.Background()
 	p, err := browser.NewPool(ctx, browser.PoolConfig{
@@ -644,8 +646,16 @@ func runChromeOwner() int {
 }
 
 // helperChild starts this binary in mode with env, in its own process
-// group, and returns it with its first stdout line.
+// group, and returns it with its first stdout line, waiting waitLimit for
+// it.
 func helperChild(t *testing.T, mode string, env ...string) (*exec.Cmd, string) {
+	t.Helper()
+	return helperChildWithin(t, waitLimit, mode, env...)
+}
+
+// helperChildWithin is helperChild waiting up to limit for the ready line.
+// A helper that exits first is reported with its exit status.
+func helperChildWithin(t *testing.T, limit time.Duration, mode string, env ...string) (*exec.Cmd, string) {
 	t.Helper()
 	exe, err := os.Executable()
 	if err != nil {
@@ -671,14 +681,19 @@ func helperChild(t *testing.T, mode string, env ...string) (*exec.Cmd, string) {
 		l, _ := bufio.NewReader(out).ReadString('\n')
 		line <- strings.TrimSpace(l)
 	}()
+	timer := time.NewTimer(limit)
+	defer timer.Stop()
 	select {
 	case l := <-line:
 		if l == "" {
-			t.Fatalf("helper %s exited before its ready line", mode)
+			// Its stdout is closed: the helper exited (or closed it).
+			_ = syscall.Kill(-pid, syscall.SIGKILL)
+			werr := c.Wait()
+			t.Fatalf("helper %s exited before its ready line: %v", mode, werr)
 		}
 		return c, l
-	case <-time.After(waitLimit):
-		t.Fatalf("helper %s: no ready line within %v", mode, waitLimit)
+	case <-timer.C:
+		t.Fatalf("helper %s: no ready line within %v", mode, limit)
 	}
 	return nil, ""
 }
@@ -1187,7 +1202,12 @@ func TestChrome_RealBrowserExitsWhenParentDies(t *testing.T) {
 	root := t.TempDir()
 	home := privateDir(t, root, "home")
 	state := privateDir(t, root, "state")
-	owner, line := helperChild(t, modeE2EChromeOwner,
+	// The helper launches a real Chrome: it gets the e2eTimeout budget of
+	// every real-Chrome launch (plus waitLimit for the helper itself), not
+	// the waitLimit of the fake helpers. Under the parallel real-Chrome
+	// suite a launch alone takes up to tens of seconds (J1 flake: no ready
+	// line within 20s); a launch that hangs still fails on this bound.
+	owner, line := helperChildWithin(t, e2eTimeout+waitLimit, modeE2EChromeOwner,
 		e2eChromeEnv+"="+exe, e2eStateEnv+"="+state, e2eHomeEnv+"="+home)
 	profile, ok := strings.CutPrefix(line, "profile=")
 	if !ok {

@@ -60,12 +60,16 @@ type watched struct {
 	typ    string // targetInfo.type ("" for the root sessions)
 }
 
-// watch subscribes, fail closed, the handlers of session: Fetch.requestPaused
-// when fetch is set, Target.attachedToTarget and Target.detachedFromTarget
-// (one queue, so a detach never overtakes its attach) when targets is set.
-// Each subscription is read by one page goroutine until it closes. It
-// returns false, subscribing nothing, when the page is stopping or parent
-// is no longer watched (it was detached meanwhile).
+// watch subscribes, fail closed, the handlers of session on ONE queue read
+// by one page goroutine until it closes: Fetch.requestPaused when fetch is
+// set, Target.attachedToTarget and Target.detachedFromTarget when targets
+// is set. Every event of a session is thus handled in arrival order,
+// whatever its method: a detach never overtakes its attach, and an event
+// that arrives after a detach is handled only once that detach took effect
+// (with a queue per method, a later pause could be answered while an
+// earlier detach was still waiting behind a slow attach). It returns false,
+// subscribing nothing, when the page is stopping or parent is no longer
+// watched (it was detached meanwhile).
 func (p *Page) watch(session, parent string, fetch, targets bool, typ string) bool {
 	p.subsMu.Lock()
 	defer p.subsMu.Unlock()
@@ -76,15 +80,17 @@ func (p *Page) watch(session, parent string, fetch, targets bool, typ string) bo
 		return false
 	}
 	w := &watched{parent: parent, typ: typ}
-	opts := SubscribeOptions{FailClosed: true}
+	var methods []string
 	if fetch {
-		w.subs = append(w.subs, p.c.Subscribe("Fetch.requestPaused", session, opts))
-		p.handleLocked(w.subs[len(w.subs)-1], p.onRequestPaused)
+		methods = append(methods, "Fetch.requestPaused")
 	}
 	if targets {
-		w.subs = append(w.subs, p.c.subscribeMethods(
-			[]string{"Target.attachedToTarget", "Target.detachedFromTarget"}, session, opts))
-		p.handleLocked(w.subs[len(w.subs)-1], p.onTargetEvent)
+		methods = append(methods, "Target.attachedToTarget", "Target.detachedFromTarget")
+	}
+	if len(methods) > 0 {
+		sub := p.c.subscribeMethods(methods, session, SubscribeOptions{FailClosed: true})
+		w.subs = append(w.subs, sub)
+		p.handleLocked(sub, p.onSessionEvent)
 	}
 	p.sessions[session] = w
 	p.notifyLocked()
@@ -182,8 +188,9 @@ type pausedRequest struct {
 // onRequestPaused continues an allowed request as is, and fails any other
 // one. Nothing of the request (path, query, headers, body) is logged.
 //
-// Pauses are handled serially per session, one CDP round trip each. More
-// than DefaultEventBuffer requests paused at once on one session overflow
+// Pauses are handled serially per session, one CDP round trip each, in
+// arrival order with that session's target events. More than
+// DefaultEventBuffer events queued at once on one session overflow
 // its fail-closed queue: the client dies and every request fails. That is
 // by design: a dropped pause would leave a request neither failed nor
 // continued, and a login page has no business sending that many at once.
@@ -283,19 +290,21 @@ type attachedTarget struct {
 	} `json:"targetInfo"`
 }
 
-// onTargetEvent handles the attach and detach events of one session, in
-// arrival order.
-func (p *Page) onTargetEvent(ev Event) {
-	if ev.Method == "Target.detachedFromTarget" {
+// onSessionEvent handles the events of one session, in arrival order.
+func (p *Page) onSessionEvent(ev Event) {
+	switch ev.Method {
+	case "Fetch.requestPaused":
+		p.onRequestPaused(ev)
+	case "Target.detachedFromTarget":
 		var d struct {
 			SessionID string `json:"sessionId"`
 		}
 		if json.Unmarshal(ev.Params, &d) == nil && d.SessionID != "" {
 			p.release(d.SessionID)
 		}
-		return
+	default:
+		p.onAttached(ev)
 	}
-	p.onAttached(ev)
 }
 
 // onAttached enforces the allowlist on an auto-attached target before it
