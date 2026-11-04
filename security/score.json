@@ -1,7 +1,7 @@
 {
-  "date": "2026-10-30",
+  "date": "2026-11-04",
   "milestone": "J1",
-  "commit": "cb765d761beb5f8dcc3185ea06061bfe953d142c",
+  "commit": "8c50a29187b91f1e7f672f279623b86875baa201",
   "total": 85,
   "categories": [
     {
@@ -405,6 +405,30 @@
       "severity": "low",
       "location": ".github/workflows/release.yml:17-21",
       "status": "open"
+    },
+    {
+      "id": "SEC-J1-18",
+      "category": 5,
+      "severity": "high",
+      "location": "internal/browser/pipe.go:77 (CodeQL #15)",
+      "status": "fixed",
+      "regression_test": "internal/browser/pipe_api_test.go"
+    },
+    {
+      "id": "SEC-J1-19",
+      "category": 1,
+      "severity": "high",
+      "location": "internal/secret/bitwarden/bitwarden.go:461 (CodeQL #13)",
+      "status": "fixed",
+      "regression_test": "internal/secret/bitwarden/capwriter_internal_test.go"
+    },
+    {
+      "id": "SEC-J1-20",
+      "category": 4,
+      "severity": "high",
+      "location": "internal/orchestrator/run.go:492 (CodeQL #14)",
+      "status": "fixed",
+      "regression_test": "internal/orchestrator/errattr_internal_test.go"
     }
   ],
   "scanners": {
