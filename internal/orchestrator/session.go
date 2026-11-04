@@ -64,7 +64,7 @@ func (o *Orchestrator) restore(ctx context.Context, cr *connRun, id string) secr
 		cr.log.LogAttrs(ctx, slog.LevelWarn, "saved session not restored; logging in again",
 			slog.String("phase", cr.phase),
 			slog.Bool("keyring", errors.Is(err, vault.ErrKeyring)),
-			slog.Any("error", err))
+			errAttr(err))
 	}
 	blob.Wipe()
 	return secret.Secret{}
@@ -90,7 +90,7 @@ func (o *Orchestrator) save(ctx context.Context, cr *connRun, id string, sess co
 	cr.res.Notes = append(cr.res.Notes, noteSessionNotSaved)
 	cr.log.LogAttrs(ctx, slog.LevelWarn, "session not saved; the next run logs in again",
 		slog.String("phase", cr.phase),
-		slog.Any("error", err))
+		errAttr(err))
 }
 
 // rejected reports whether err means the supplier refused a restored
@@ -105,7 +105,7 @@ func (o *Orchestrator) rejected(ctx context.Context, cr *connRun, id string, res
 	if derr := o.sessions.Delete(ctx, id); derr != nil {
 		cr.log.LogAttrs(ctx, slog.LevelWarn, "rejected saved session not removed",
 			slog.String("phase", cr.phase),
-			slog.Any("error", derr))
+			errAttr(derr))
 	}
 	return true
 }

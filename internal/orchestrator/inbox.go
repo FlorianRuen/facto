@@ -103,7 +103,7 @@ func (o *Orchestrator) ingestItem(ctx context.Context, src InboxSource, it inbox
 		o.log.LogAttrs(ctx, slog.LevelWarn, "inbox file filed but not removed",
 			slog.String("origin", it.Path),
 			slog.String("status", string(res.Status)),
-			slog.Any("error", err))
+			errAttr(err))
 		return res, &Warning{Source: InboxSourceName, Path: it.Path, Reason: ReasonNotRemoved}
 	}
 	return res, nil

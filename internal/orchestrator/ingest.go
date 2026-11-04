@@ -169,7 +169,7 @@ func (o *Orchestrator) file(ctx context.Context, in Input, doc normalize.Doc, p 
 			slog.String("provider", res.Provider),
 			slog.String("destination", o.dst.Name()),
 			slog.String("path", p.Rel()),
-			slog.Any("error", err))
+			errAttr(err))
 		return fmt.Errorf("ingest: index: %w", err)
 	}
 
@@ -205,5 +205,5 @@ func (o *Orchestrator) logFailure(ctx context.Context, res DocResult, err error)
 		slog.String("origin", res.Origin),
 		slog.String("provider", res.Provider),
 		slog.String("status", string(res.Status)),
-		slog.Any("error", err))
+		errAttr(err))
 }

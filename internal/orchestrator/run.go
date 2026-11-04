@@ -13,6 +13,7 @@ import (
 
 	"github.com/FlorianRuen/facto/internal/connector"
 	"github.com/FlorianRuen/facto/internal/httpx"
+	"github.com/FlorianRuen/facto/internal/logx"
 	"github.com/FlorianRuen/facto/internal/normalize"
 )
 
@@ -469,6 +470,18 @@ func (o *Orchestrator) stepFailed(ctx context.Context, cr *connRun, rejected boo
 	o.fail(ctx, cr, st, err)
 }
 
+// errAttr is how every orchestrator log line carries an error: its text,
+// cleaned by logx.Clean at the call site, as a plain string. The raw error
+// value never reaches a handler, so nothing wrapped in the chain (a value a
+// connector quoted, a credential reference) depends on the handler's own
+// redaction to stay out of the log (CodeQL #14).
+func errAttr(err error) slog.Attr {
+	if err == nil {
+		return slog.String("error", "")
+	}
+	return slog.String("error", logx.Clean(err.Error()))
+}
+
 // fail sets the connector state, adds the fixed note of needs_login
 // (`facto login <id>`) or auth_failed (`facto config <id>`), and logs it
 // through the redacting logger. The error text never reaches the result.
@@ -489,7 +502,7 @@ func (o *Orchestrator) fail(ctx context.Context, cr *connRun, st State, err erro
 	cr.log.LogAttrs(ctx, level, "connector stopped",
 		slog.String("phase", cr.phase),
 		slog.String("state", string(st)),
-		slog.Any("error", err))
+		errAttr(err))
 }
 
 // docFailed logs a document the connector loop could not hand to Ingest,
@@ -499,7 +512,7 @@ func (o *Orchestrator) docFailed(ctx context.Context, cr *connRun, d DocResult, 
 		slog.String("phase", cr.phase),
 		slog.String("provider_id", d.ProviderID),
 		slog.String("status", string(d.Status)),
-		slog.Any("error", err))
+		errAttr(err))
 }
 
 // sentinelState maps a connector sentinel (errors.Is) to its state.
