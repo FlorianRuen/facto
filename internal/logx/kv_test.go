@@ -58,8 +58,7 @@ func TestClean_KeepsNonSensitiveKeyValues(t *testing.T) {
 }
 
 func TestClean_KeyValueMaskingIsLinear(t *testing.T) {
-	// Not parallel: outside Linux the budget is the process CPU time (see
-	// package cputime), only meaningful while the parallel property tests wait.
+	// Not parallel: see assertCleanLinear.
 	assertCleanLinear(t, map[string]string{
 		"keys without separator": "password ",
 		"keys with empty values": "password=&",

@@ -16,7 +16,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/FlorianRuen/facto/internal/logx"
 )
@@ -241,18 +240,6 @@ func TestClean_ParseErrorRegressions(t *testing.T) {
 	}
 }
 
-// linearBudget is the CPU time (package cputime) a 1 MB line may take: 2 s,
-// or 10 s under the race detector, where the linear per-byte loops of Clean
-// (maskBase64 among them) already take about 1 s per MB with coverage on.
-// The quadratic scan this guards against took 87 s per MB without the race
-// detector.
-func linearBudget() time.Duration {
-	if raceBuild {
-		return 10 * time.Second
-	}
-	return 2 * time.Second
-}
-
 // depthUnits returns parse tokens delimited at every escaping depth from 0
 // to 40 backslashes, none of them closed.
 func depthUnits() string {
@@ -264,8 +251,7 @@ func depthUnits() string {
 }
 
 func TestClean_LongLinesAreLinear(t *testing.T) {
-	// Not parallel: outside Linux the budget is the process CPU time (see
-	// package cputime), only meaningful while the parallel property tests wait.
+	// Not parallel: see assertCleanLinear.
 	assertCleanLinear(t, map[string]string{
 		"parse with colon":     `parse "a": `,
 		"escaped parse quotes": `parse \"`,

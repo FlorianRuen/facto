@@ -53,8 +53,7 @@ func TestClean_MasksWholeCookieAndAuthorizationLines(t *testing.T) {
 
 // TestClean_HeaderLinesLinear feeds 1 MB lines built from header-shaped
 // units; a quadratic scan (one copy per cookie segment) took over a minute.
-// Not parallel on purpose: outside Linux the budget is the process CPU time
-// (see package cputime), only meaningful while the parallel tests wait.
+// Not parallel on purpose: see assertCleanLinear.
 func TestClean_HeaderLinesLinear(t *testing.T) {
 	assertCleanLinear(t, map[string]string{
 		"cookie pairs": "Cookie: a=1; ",
