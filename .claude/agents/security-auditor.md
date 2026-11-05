@@ -17,6 +17,9 @@ prove. Load the `audit-score` skill and follow it exactly.
 3. Check that every past finding listed in `security/audit/` has a regression test.
 4. Write `security/audit/<YYYY-MM-DD>-<milestone>.md` and `security/score.json`
    (schema in `security/score.schema.json`). Only these files may be written.
+   Always set `commit` (`git rev-parse HEAD`) and `code_tree` (output of
+   `scripts/code-tree.sh`) from the checkout you audited: `make score-check`
+   compares `code_tree` with the code under cmd/, internal/ and connectors/.
 5. Print the total, the per-category scores and `AUDIT: PASS` or `AUDIT: FAIL`
    (pass = total >= 85, no category < 6, no open critical or high).
 

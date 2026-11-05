@@ -14,7 +14,8 @@ Read it before any architectural change.
 | `make e2e` | End-to-end tests against `connectors/fakeprovider` and a Vaultwarden container |
 | `make leakcheck` | Canary secret scan over every file, log and report produced by the tests |
 | `make audit` | govulncheck, gosec, gitleaks, osv-scanner; writes `security/scanners.json` |
-| `make score-check` | Fails if `security/score.json` is missing, stale or under the gate |
+| `make score-check` | Fails if `security/score.json` is missing, under the gate, or its `code_tree` differs from the checked-out code (sha256 of `git ls-tree -r HEAD -- cmd internal connectors`) |
+| `make score-check-test` | Tests of `check-score.sh`: same code via merge/squash/rebase passes, changed code fails (run by `verify`) |
 | `make chrome` | Installs the pinned Chrome for Testing into `.cache/chrome` (`facto browser install`, verified by size and SHA-256); `make e2e` depends on it and also runs the real-Chrome tests (`-tags e2e,chrome`) |
 | `make e2e-unit` | Unit tests with `-race -tags e2e` in every package with e2e-only files; never needs Chrome (run by `verify`) |
 | `make release-e2e-check` | Fails if the release build (exact `.goreleaser.yaml` flags) contains e2e-only code; prints `release-check: release build has no e2e-only code` (run by `verify`) |

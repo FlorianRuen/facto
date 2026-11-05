@@ -10,7 +10,7 @@ export ART_DIR := $(CURDIR)/.cache/test-artifacts
 # lint-selftest creates in-tree fixtures that race/lint must not see: never run targets in parallel.
 .NOTPARALLEL:
 
-.PHONY: verify fmt-check lint lint-selftest test race cover e2e e2e-unit e2e-browser-windows chrome leakcheck audit score-check tools lint-actions release-check release-e2e-check
+.PHONY: verify fmt-check lint lint-selftest test race cover e2e e2e-unit e2e-browser-windows chrome leakcheck audit score-check score-check-test tools lint-actions release-check release-e2e-check
 
 # goreleaser runs from its pinned image (ADR 0001) so its dependencies stay out
 # of tools/go.mod and the osv-scanner scope.
@@ -23,7 +23,7 @@ GORELEASER_RUN := -e HOME=/tmp -e GOFLAGS=-mod=readonly -e GOTOOLCHAIN=go$(shell
 	-e GOPROXY=file:///hostmod/cache/download -e GOSUMDB=off -e GOMODCACHE=/tmp/gomod \
 	-v $(shell $(GO) env GOMODCACHE):/hostmod:ro -v $(CURDIR):/src:ro
 
-verify: fmt-check lint lint-selftest race cover e2e-unit release-e2e-check leakcheck ## everything required before a commit
+verify: fmt-check lint lint-selftest race cover e2e-unit release-e2e-check score-check-test leakcheck ## everything required before a commit
 	@echo "verify: ok"
 
 fmt-check:
@@ -134,6 +134,12 @@ audit:
 
 score-check:
 	./scripts/check-score.sh
+
+# Tests of the score gate (check-score.sh) on throwaway repositories under
+# .cache/score-check-test/: same code via merge, squash or rebase is accepted,
+# any change under cmd/ internal/ connectors/ is rejected (run by verify).
+score-check-test:
+	./scripts/check-score-test.sh
 
 # Pinned tool versions live in tools/go.mod and tools/actionlint/go.mod (ADR 0001):
 # actionlint has its own module because of a yaml/v4 rc clash with osv-scanner.
