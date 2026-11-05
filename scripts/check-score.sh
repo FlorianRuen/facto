@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
-# Fails unless security/score.json exists, matches HEAD (or is newer than the last
-# change under internal/ and connectors/), and passes the gate. Prints AUDIT: PASS|FAIL.
+# Fails unless security/score.json exists, was produced for the code currently checked
+# out, and passes the gate. Prints AUDIT: PASS|FAIL.
+#
+# "Code currently checked out" is the tree hash code_tree: the sha256 of
+# `git ls-tree -r HEAD -- cmd internal connectors` (see scripts/code-tree.sh). It only
+# depends on the content of those directories, so a merge or squash commit carrying
+# exactly the audited code still passes, while any change under them fails until a new
+# audit writes a new code_tree. Uncommitted changes are not part of HEAD and are ignored.
 set -euo pipefail
 f=security/score.json
 [[ -f $f ]] || { echo "AUDIT: FAIL (no $f)"; exit 1; }
-commit=$(python3 -c 'import json;print(json.load(open("security/score.json"))["commit"])')
-last_code=$(git log -1 --format=%H -- internal connectors cmd || true)
-if [[ -n "$last_code" ]] && ! git merge-base --is-ancestor "$last_code" "$commit" 2>/dev/null; then
-  echo "AUDIT: FAIL (score.json is older than the last code change $last_code)"; exit 1
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+want=$(python3 -c 'import json;print(json.load(open("security/score.json")).get("code_tree", ""))')
+[[ -n "$want" ]] || { echo "AUDIT: FAIL (score.json has no code_tree)"; exit 1; }
+got=$("$here/code-tree.sh")
+if [[ "$got" != "$want" ]]; then
+  echo "AUDIT: FAIL (code under cmd/ internal/ connectors/ changed since the audit: code_tree $got != score.json $want)"
+  exit 1
 fi
 python3 - <<'PY'
 import json, sys

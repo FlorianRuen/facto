@@ -492,7 +492,8 @@ The Makefile is the only entry point:
 | `make e2e-browser-windows` | Real-Chrome Windows checks of the CDP port; needs `FACTO_E2E_CHROME` |
 | `make leakcheck` | Canary secret scan over every file, log and report produced by the tests |
 | `make audit` | govulncheck, gosec, gitleaks, osv-scanner; writes `security/scanners.json` |
-| `make score-check` | Fails if `security/score.json` is missing, stale or under the gate |
+| `make score-check` | Fails if `security/score.json` is missing, under the gate, or its `code_tree` differs from the checked-out code (sha256 of `git ls-tree -r HEAD -- cmd internal connectors`) |
+| `make score-check-test` | Tests of `check-score.sh`: same code via merge/squash/rebase passes, changed code fails (run by `verify`) |
 
 `make e2e` needs Docker and, on its first run, network access to download the
 pinned Chrome for Testing (Linux x86-64). It drives the real browser against a

@@ -16,7 +16,12 @@ description: Exact procedure and rubric to produce facto's security score (secur
    (code excerpt or test output), suggested fix, regression test name once fixed.
 4. Write `security/audit/<YYYY-MM-DD>-<milestone>.md` (summary table, findings,
    diff since previous audit) and `security/score.json` matching
-   `security/score.schema.json`, with `commit` = `git rev-parse HEAD`.
+   `security/score.schema.json`, with `commit` = `git rev-parse HEAD` and
+   `code_tree` = the output of `scripts/code-tree.sh` (sha256 of
+   `git ls-tree -r HEAD -- cmd internal connectors`), both taken on the audited
+   checkout. `code_tree` is required: `make score-check` recomputes it and fails
+   on any mismatch, so a score.json without it, or copied from another audit,
+   never passes. Never edit `code_tree` by hand to make the gate pass.
 5. Pass = total >= 85 AND every category >= 6 (scaled to 10) AND no open critical/high
    AND all scanner gates pass. Print `AUDIT: PASS` or `AUDIT: FAIL` with the reasons.
 

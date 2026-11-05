@@ -2,11 +2,15 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "facto security score",
   "type": "object",
-  "required": ["date", "milestone", "commit", "total", "categories", "findings", "scanners", "verdict"],
+  "required": ["date", "milestone", "commit", "code_tree", "total", "categories", "findings", "scanners", "verdict"],
   "properties": {
     "date": { "type": "string", "format": "date" },
     "milestone": { "type": "string", "pattern": "^J[0-9]+$" },
     "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "code_tree": {
+      "description": "sha256 of `git ls-tree -r HEAD -- cmd internal connectors` (scripts/code-tree.sh) at the audited commit; make score-check compares it with the checkout",
+      "type": "string", "pattern": "^[0-9a-f]{64}$"
+    },
     "total": { "type": "number", "minimum": 0, "maximum": 100 },
     "categories": {
       "type": "array", "minItems": 10, "maxItems": 10,
