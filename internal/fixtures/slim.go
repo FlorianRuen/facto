@@ -94,7 +94,8 @@ func Slim(f *har.File, opts SlimOptions) (*Slimmed, error) {
 		case !slices.Contains(hosts, host),
 			slices.Contains(skipTypes, e.ResourceType),
 			e.Response.Status == 0, e.Response.Status == 404,
-			e.ResourceType == "script" && e.Request.Method == methodGET:
+			e.ResourceType == "script" && e.Request.Method == methodGET,
+			strings.HasPrefix(u.Path, "/cdn-cgi/"):
 			continue
 		}
 		mime := baseMIME(e.Response.Content.MimeType)
@@ -113,8 +114,8 @@ func Slim(f *har.File, opts SlimOptions) (*Slimmed, error) {
 			Method: e.Request.Method, Host: host, Path: u.EscapedPath(), Status: e.Response.Status,
 			Type: e.ResourceType, MimeType: mime, Location: e.Response.RedirectURL,
 		}
-		if u.RawQuery != "" {
-			st.Path += "?" + u.RawQuery
+		if q := dropTrackers(u.RawQuery); q != "" {
+			st.Path += "?" + q
 		}
 		if pd := e.Request.PostData; pd != nil {
 			st.RequestType, st.RequestBody = baseMIME(pd.MimeType), pd.Text
@@ -185,4 +186,25 @@ func bodyName(n int, method, p, ext string) string {
 		slug = slug[:60]
 	}
 	return fmt.Sprintf("%03d-%s-%s.%s", n, nameRE.ReplaceAllString(strings.ToLower(method), ""), strings.Trim(slug, "-"), ext)
+}
+
+// trackerParams are analytics query parameters, never part of a flow.
+var trackerParams = []string{"_gl", "_ga", "gclid", "fbclid", "msclkid", "mc_eid", "mc_cid"}
+
+// dropTrackers removes analytics parameters (and utm_*) from a raw query,
+// keeping the order and encoding of the others.
+func dropTrackers(q string) string {
+	if q == "" {
+		return ""
+	}
+	var keep []string
+	for part := range strings.SplitSeq(q, "&") {
+		k, _, _ := strings.Cut(part, "=")
+		k = strings.ToLower(k)
+		if slices.Contains(trackerParams, k) || strings.HasPrefix(k, "utm_") {
+			continue
+		}
+		keep = append(keep, part)
+	}
+	return strings.Join(keep, "&")
 }

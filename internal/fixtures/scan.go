@@ -44,8 +44,9 @@ var (
 	// A postcode followed by a city name in capitals (as on invoices).
 	cityRE = regexp.MustCompile(`\b(\d{5})\s+[\p{Lu}][\p{Lu}' -]{2,}\b`)
 	// secret fields with a value: JSON "name":"value" and form name=value.
-	jsonFieldRE = regexp.MustCompile(`"([A-Za-z0-9_.\[\]-]{2,64})"\s*:\s*"([^"]*)"`)
-	formFieldRE = regexp.MustCompile(`(?:^|[?&\s])([A-Za-z0-9_.\[\]%-]{2,64})=([^&\s"'<>]*)`)
+	jsonFieldRE       = regexp.MustCompile(`"([A-Za-z0-9_.\[\]-]{2,64})"\s*:\s*"([^"]*)"`)
+	jsonNumberFieldRE = regexp.MustCompile(`"([A-Za-z0-9_.-]{2,64})"\s*:\s*(-?\d+(?:\.\d+)?)`)
+	formFieldRE       = regexp.MustCompile(`(?:^|[?&\s])([A-Za-z0-9_.\[\]%-]{2,64})=([^&\s"'<>]*)`)
 )
 
 // syntheticEmailDomains are reserved for examples (RFC 2606, RFC 6761).
@@ -113,6 +114,14 @@ func scanLine(line string) []string {
 	for _, m := range jsonFieldRE.FindAllStringSubmatch(line, -1) {
 		if har.SecretField(m[1]) && !placeholder(m[2]) {
 			add("secret-field")
+		}
+		if k := personalJSONField(m[1], m[2]); k != "" {
+			add(k)
+		}
+	}
+	for _, m := range jsonNumberFieldRE.FindAllStringSubmatch(line, -1) {
+		if k := personalJSONField(m[1], m[2]); k != "" {
+			add(k)
 		}
 	}
 	for _, m := range formFieldRE.FindAllStringSubmatch(line, -1) {
@@ -252,4 +261,23 @@ func validNIR(s string) bool {
 	}
 	key := int(s[13]-'0')*10 + int(s[14]-'0')
 	return 97-mod == key
+}
+
+// personalJSONField reports the kind of a JSON field whose name says it is
+// personal and whose value is not synthetic: precise coordinates (more
+// than 2 decimals, not 0), phone numbers in any format.
+func personalJSONField(name, value string) string {
+	n := strings.ToLower(strings.NewReplacer("_", "", "-", "", ".", "").Replace(name))
+	switch n {
+	case "lat", "latitude", "lng", "lon", "long", "longitude":
+		if _, dec, ok := strings.Cut(value, "."); ok && len(dec) > 2 && strings.Trim(dec, "0") != "" {
+			return "coordinates"
+		}
+	}
+	if strings.Contains(n, "phone") || n == "tel" || n == "mobile" {
+		if d := digits(value); len(d) >= 8 && !syntheticPhone(value) {
+			return "phone"
+		}
+	}
+	return ""
 }

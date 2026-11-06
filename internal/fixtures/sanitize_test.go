@@ -117,3 +117,82 @@ func TestSanitize_DatesKeepOrderAndIntervals(t *testing.T) {
 		t.Fatalf("dates kept: %s", got)
 	}
 }
+
+// TestSanitize_JSONValuesByFieldNeverKeys (J2, Wecasa): in a JSON body
+// every personal field is replaced by its name (zip_code, street_number,
+// lat/lng, any phone format, email, names), and keys are never rewritten,
+// even when a learned name is also a key fragment ("free_<word>").
+func TestSanitize_JSONValuesByFieldNeverKeys(t *testing.T) {
+	t.Parallel()
+	in := `{"data":{"street_number":"36","street_name":"Rue Pasteur","city":"Roubaix","zip_code":"59100",` +
+		`"lat":"50.686244","lng":"3.184639","latitude":50.6,"longitude":3.1,"phone":"+12982913653","mobile_phone":"0471 22 33 44",` +
+		`"first_name":"Camille","last_name":"Rousseau","email":"c.r@laposte.net","rooms":6,"free_parking":false,` +
+		`"pro":{"first_name":"Pasteur"},"comments":"code porte 1234, demander Camille"}}`
+	s := fixtures.NewSanitizer([]byte("k"))
+	s.Learn(in)
+	got := s.Text(in)
+	for _, leak := range []string{
+		"36\"", "Pasteur", "Roubaix", "59100", "50.686244", "3.184639", "50.6,", "3.1,",
+		"2982913653", "0471", "Camille", "Rousseau", "laposte", "1234",
+	} {
+		if strings.Contains(got, leak) {
+			t.Errorf("leak %q in %s", leak, got)
+		}
+	}
+	for _, key := range []string{`"rooms":6`, `"free_parking":false`, `"street_number":"1"`, `"zip_code":"00000"`} {
+		if !strings.Contains(got, key) {
+			t.Errorf("want %s in %s", key, got)
+		}
+	}
+	if f := fixtures.ScanText("o.json", got); len(f) != 0 {
+		t.Errorf("scan: %v", f)
+	}
+	if again := s.Text(got); again != got {
+		t.Errorf("not idempotent:\n%s\n%s", got, again)
+	}
+}
+
+// TestScan_FindsCoordinatesAndForeignPhones: precise coordinates and
+// international phone numbers in JSON fields are personal data.
+func TestScan_FindsCoordinatesAndForeignPhones(t *testing.T) {
+	t.Parallel()
+	for _, in := range []string{`{"lat":"50.686244","lng":"3.184639"}`, `{"latitude":50.68624}`, `{"phone":"+12982913653"}`} {
+		if len(fixtures.ScanText("f.json", in)) == 0 {
+			t.Errorf("no finding for %s", in)
+		}
+	}
+	for _, in := range []string{`{"lat":"0.0","lng":"0.0"}`, `{"phone":"+33 6 00 00 00 01"}`, `{"duration":180}`} {
+		if f := fixtures.ScanText("f.json", in); len(f) != 0 {
+			t.Errorf("finding %v for synthetic %s", f, in)
+		}
+	}
+}
+
+// TestSanitize_WecasaShapedOrderOnePass (J2): an order shaped like
+// Wecasa's /api/v1/customer/orders/<id> (invented values) is clean after
+// one pass: no key renamed, nothing the scanner flags.
+func TestSanitize_WecasaShapedOrderOnePass(t *testing.T) {
+	t.Parallel()
+	in := `{"success":true,"data":{"type":"order","appointment":"2026-09-29T16:00:00.000+02:00","public_id":"MmBPtjTkFqsp",` +
+		`"currency":"EUR","stage":"Done","address":"36 Rue Pasteur, 59100, Roubaix","street_number":"36","street_name":"Rue Pasteur",` +
+		`"city":"Roubaix","zip_code":"59100","country_code":"FR","lat":"50.686244","lng":"3.184639","phone":"+33612345678",` +
+		`"rooms":6,"comments":"Clé chez Mme Durand","salutation":"M.","first_name":"Camille","email":"c.r@gmail.com",` +
+		`"last_name":"Rousseau","free_parking":false,"pro":{"first_name":"Rooms"},` +
+		`"prestations_combo_prices":[{"price_by_rooms":2861}],"routes":{"terms_of_use":"/cgu","terms_of_use_care":"/cgu-care"}}}`
+	s := fixtures.NewSanitizer([]byte("k"))
+	s.Learn(in)
+	got := s.Text(in)
+	for _, key := range []string{`"rooms":`, `"free_parking":`, `"price_by_rooms":`, `"terms_of_use":`, `"terms_of_use_care":`, `"public_id":"MmBPtjTkFqsp"`, `"stage":"Done"`} {
+		if !strings.Contains(got, key) {
+			t.Errorf("key or value %s lost:\n%s", key, got)
+		}
+	}
+	for _, leak := range []string{"Pasteur", "Roubaix", "59100", "50.686", "3.1846", "612345678", "Camille", "Rousseau", "gmail", "Durand"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("leak %q:\n%s", leak, got)
+		}
+	}
+	if f := fixtures.ScanText("o.json", got); len(f) != 0 {
+		t.Errorf("scan: %v", f)
+	}
+}

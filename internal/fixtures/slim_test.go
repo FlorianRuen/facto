@@ -148,3 +148,24 @@ func TestSlim_DropsStaticAssetsByMIMEWhateverTheirResourceType(t *testing.T) {
 		t.Fatalf("steps = %+v, want only the API call", out.Flow.Steps)
 	}
 }
+
+// TestSlim_DropsTrackersAndBotChallenges (J2, Wecasa): Cloudflare's
+// /cdn-cgi/ challenge calls are not part of the supplier flow, and the
+// Google Analytics linker (_gl, _ga, utm_*, gclid, fbclid) is dropped from
+// kept URLs.
+func TestSlim_DropsTrackersAndBotChallenges(t *testing.T) {
+	t.Parallel()
+	f := har.New("facto", "test")
+	f.Log.Entries = []har.Entry{
+		entry("GET", "https://www.example.test/login?_gl=1*abc*_ga*MTIz&next=%2Fa&utm_source=x&gclid=1&fbclid=2", 200, "document", "text/html", "<form></form>"),
+		entry("POST", "https://www.example.test/cdn-cgi/challenge-platform/h/b/jsd/oneshot/1/0.5:1:x/abc", 200, "fetch", "text/plain", "ok"),
+		entry("GET", "https://www.example.test/cdn-cgi/rum?x", 204, "fetch", "", ""),
+	}
+	out, err := fixtures.Slim(f, fixtures.SlimOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Flow.Steps) != 1 || out.Flow.Steps[0].Path != "/login?next=%2Fa" {
+		t.Fatalf("steps = %+v", out.Flow.Steps)
+	}
+}

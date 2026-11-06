@@ -140,6 +140,14 @@ var (
 // set first, so a name learned in one file is replaced in all.
 func (s *Sanitizer) Text(text string) string {
 	s.Learn(text)
+	if out, ok := s.jsonText(text); ok {
+		return out
+	}
+	return s.freeText(text)
+}
+
+// freeText applies the text rules (HTML, plain text, one JSON string).
+func (s *Sanitizer) freeText(text string) string {
 	text = emailRE.ReplaceAllStringFunc(text, func(m string) string {
 		if syntheticEmail(m) {
 			return m
@@ -403,4 +411,137 @@ func syntheticPhoneLike(m, nn string) string {
 		}
 	}
 	return string(out)
+}
+
+// Personal JSON fields, by normalized name (normalizeKey).
+var (
+	zipFields    = []string{"zip", "zipcode", "postcode", "postalcode", "codepostal", "cp"}
+	streetNumber = []string{"streetnumber", "housenumber", "numerovoie", "numero"}
+	latFields    = []string{"lat", "latitude"}
+	lngFields    = []string{"lng", "lon", "long", "longitude"}
+)
+
+func phoneField(n string) bool {
+	return strings.Contains(n, "phone") || strings.Contains(n, "telephone") || n == "tel" || n == "mobile"
+}
+func emailField(n string) bool { return strings.Contains(n, "email") || n == "mail" }
+
+// jsonText sanitizes a JSON document value by value: keys are never
+// rewritten (a learned name may also be a key fragment), personal fields
+// are replaced by their name, every other string goes through freeText.
+// ok is false when text is not one JSON document.
+func (s *Sanitizer) jsonText(text string) (string, bool) {
+	t := strings.TrimSpace(text)
+	if !strings.HasPrefix(t, "{") && !strings.HasPrefix(t, "[") {
+		return "", false
+	}
+	dec := json.NewDecoder(strings.NewReader(text))
+	dec.UseNumber()
+	var v any
+	if dec.Decode(&v) != nil || dec.More() {
+		return "", false
+	}
+	changed := false
+	v = s.jsonValue("", v, &changed)
+	if !changed {
+		return text, true
+	}
+	var b strings.Builder
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if enc.Encode(v) != nil {
+		return "", false
+	}
+	out := strings.TrimSuffix(b.String(), "\n")
+	if strings.HasSuffix(text, "\n") {
+		out += "\n"
+	}
+	return out, true
+}
+
+func (s *Sanitizer) jsonValue(key string, v any, changed *bool) any {
+	n := normalizeKey(key)
+	switch x := v.(type) {
+	case map[string]any:
+		for k, val := range x {
+			x[k] = s.jsonValue(k, val, changed)
+		}
+		return x
+	case []any:
+		for i := range x {
+			x[i] = s.jsonValue(key, x[i], changed)
+		}
+		return x
+	case json.Number:
+		out := s.jsonNumber(key, n, x)
+		if out != x {
+			*changed = true
+		}
+		return out
+	case string:
+		out := s.jsonString(n, x)
+		if out != x {
+			*changed = true
+		}
+		return out
+	default:
+		return v
+	}
+}
+
+// jsonNumber replaces coordinates and postcodes, then applies the amount,
+// reference and digit rules of the text path to the number's literal (via
+// a "key":number snippet, so the cents rule sees the field name).
+func (s *Sanitizer) jsonNumber(key, n string, x json.Number) json.Number {
+	switch {
+	case slices.Contains(latFields, n), slices.Contains(lngFields, n):
+		if x == "0" || x == "0.0" {
+			return x
+		}
+		return json.Number("0.0")
+	case slices.Contains(zipFields, n):
+		return json.Number("0")
+	}
+	snippet := `"` + key + `":` + string(x)
+	out := s.freeText(snippet)
+	if _, lit, ok := strings.Cut(out, `":`); ok && lit != string(x) {
+		if _, err := strconv.ParseFloat(lit, 64); err == nil {
+			return json.Number(lit)
+		}
+	}
+	return x
+}
+
+func (s *Sanitizer) jsonString(n, v string) string {
+	if v == "" {
+		return v
+	}
+	switch {
+	case slices.Contains(latFields, n), slices.Contains(lngFields, n):
+		return "0.0"
+	case slices.Contains(zipFields, n):
+		return "00000"
+	case slices.Contains(streetNumber, n):
+		return "1"
+	case n == "city" || n == "ville" || n == "commune" || n == "locality" || n == "town":
+		return "Ville-Exemple"
+	case n == "address" || n == "adresse" || n == "fulladdress" || n == "formattedaddress" || n == "address1" || n == "address2" || n == "addressline1" || n == "addressline2":
+		return "1 rue de l'Exemple, 00000 Ville-Exemple"
+	case n == "streetname" || n == "street" || n == "rue" || n == "voie":
+		return "rue de l'Exemple"
+	case phoneField(n):
+		if syntheticPhone(v) {
+			return v
+		}
+		return s.memoized("phone", digits(v), func(k int) string { return fmt.Sprintf("+33 6 00 00 00 %02d", k%100) })
+	case emailField(n):
+		if syntheticEmail(v) || v == "[redacted]" {
+			return v
+		}
+		return s.memoized("email", strings.ToLower(v), func(k int) string { return fmt.Sprintf("user-%04d@example.org", k) })
+	case n == "comments" || n == "comment" || n == "message" || n == "note" || n == "notes" || n == "addressdetails" || n == "instructions":
+		// Free text written by a person: never kept.
+		return "Synthetic comment."
+	}
+	return s.freeText(v)
 }
