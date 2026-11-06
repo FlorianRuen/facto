@@ -13,7 +13,9 @@ description: >
 setup:
   - path: rec
     dir: true
-args: [record, "https://www.fakeprovider.test/login", --connector, fakeprovider, --out, "{{home}}/rec/fakeprovider.har", --until, "#done", --timeout, 90s]
+# The account page is an app shell whose bundle lives on shared storage
+# (J2, Wecasa): only --allow-static lets the list load.
+args: [record, "https://www.fakeprovider.test/login", --connector, fakeprovider, --allow-static, "https://static.fakeprovider.test/app/", --out, "{{home}}/rec/fakeprovider.har", --until, "#done", --timeout, 90s]
 fakesite:
   mode: record
   login: fp/login
@@ -47,7 +49,8 @@ expect:
         - '"name": "fp_session"'
         - '"name": "authorization"'
         # The bearer token the account page inlines is scrubbed (taint).
-        - 'Bearer \" + \"[redacted]\"'
+        - 'token: \"[redacted]\"'
+        - "https://static.fakeprovider.test/app/list.js"
         - "binary body not recorded"
         - "ERR_BLOCKED_BY_CLIENT"
       not_contains:
@@ -57,6 +60,9 @@ expect:
     - { method: POST, host: www.fakeprovider.test, path: /login, count: 1 }
     - { host: www.fakeprovider.test, path: /api/invoices, min: 1 }
     - { host: evil.test, count: 0 }
+    # Static allowlist: the app bundle only, never another bucket.
+    - { host: static.fakeprovider.test, path: /app/list.js, min: 1 }
+    - { host: static.fakeprovider.test, path: /other-bucket/evil.js, count: 0 }
   browser:
     no_cdp_port: true
     profile_removed: true

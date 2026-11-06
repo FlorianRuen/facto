@@ -824,10 +824,25 @@ func TestFakeSite_RecordMode(t *testing.T) {
 		t.Fatalf("record login: Location = %q, want /account", loc)
 	}
 	_, acct := get(t, c, "https://"+HostWWW+"/account")
-	for _, want := range []string{`id="account"`, "/api/invoices", "/api/invoices/FP-2026-0001/pdf", "Bearer", `"done"`} {
+	// The list is built by the app bundle on the static host (J2: a
+	// supplier app on shared storage), and the page also tries another
+	// path of that host, which the static allowlist must block.
+	for _, want := range []string{`id="account"`, "https://" + HostStatic + StaticAppPath + "list.js", "https://" + HostStatic + "/other-bucket/evil.js", "/api/invoices", "/api/invoices/FP-2026-0001/pdf"} {
 		if !strings.Contains(acct, want) {
 			t.Errorf("record account page lacks %q:\n%s", want, acct)
 		}
+	}
+	resp, js := get(t, c, "https://"+HostStatic+StaticAppPath+"list.js")
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "text/javascript; charset=utf-8" {
+		t.Fatalf("static bundle: %d %q", resp.StatusCode, resp.Header.Get("Content-Type"))
+	}
+	for _, want := range []string{"window.__FP", "Bearer", `"done"`} {
+		if !strings.Contains(js, want) {
+			t.Errorf("static bundle lacks %q:\n%s", want, js)
+		}
+	}
+	if resp, _ := get(t, c, "https://"+HostStatic+"/other-bucket/evil.js"); resp.StatusCode != http.StatusOK {
+		t.Errorf("off-prefix static file must exist (so only the browser can block it): %d", resp.StatusCode)
 	}
 	// Other modes never put the credentials in a page.
 	other := unitSite(t, ModePassword)

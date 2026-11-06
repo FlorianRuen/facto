@@ -202,7 +202,7 @@ func (s *fakeSite) newCA(t *testing.T) tls.Certificate {
 	leafTmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(2),
 		Subject:      pkix.Name{CommonName: HostWWW},
-		DNSNames:     []string{HostWWW, HostSSO, EvilHost},
+		DNSNames:     []string{HostWWW, HostSSO, HostStatic, EvilHost},
 		NotBefore:    now.Add(-time.Hour),
 		NotAfter:     now.Add(24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
@@ -406,6 +406,8 @@ func (s *fakeSite) serve(w http.ResponseWriter, r *http.Request) {
 		s.serveWWW(sw, r)
 	case HostSSO:
 		s.serveSSO(sw, r)
+	case HostStatic:
+		serveStatic(sw, r)
 	case EvilHost:
 		// Off every allowlist: served (so a leak is logged), never linked
 		// to any state.
@@ -752,6 +754,42 @@ func (s *fakeSite) list(w http.ResponseWriter, r *http.Request) {
 	}{Invoices: out})
 }
 
+// staticListJS is the app bundle of the record-mode account page.
+const staticListJS = `(function () {
+  var c = window.__FP, base = "https://www.fakeprovider.test";
+  var auth = {headers: {"Authorization": "Bearer " + c.token}};
+  fetch(base + c.list, auth)
+    .then(function (r) { return r.json(); })
+    .then(function () { return fetch(base + c.pdf, auth); })
+    .then(function (r) { return r.arrayBuffer(); })
+    .finally(function () {
+      var p = document.createElement("p");
+      p.id = "done"; p.textContent = "done";
+      document.body.appendChild(p);
+    });
+})();
+`
+
+// serveStatic is the shared storage host: the app bundle under
+// StaticAppPath, and another bucket's script (served, so that only the
+// browser's static allowlist can keep it out). No cookie, no state.
+func serveStatic(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	switch r.URL.Path {
+	case StaticAppPath + "list.js":
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		_, _ = w.Write([]byte(staticListJS))
+	case "/other-bucket/evil.js":
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		_, _ = w.Write([]byte(`document.title = "evil bundle ran";`))
+	default:
+		http.NotFound(w, r)
+	}
+}
+
 // recordAccountData is the record-mode account page data: the list URL of
 // every seeded invoice, the first PDF URL and a bearer token minted like a
 // session (hunted by the leak checks).
@@ -891,22 +929,17 @@ var (
 
 	// recordAccountTmpl (mode record) loads the invoice list with a bearer
 	// token, then the first PDF, then shows #done.
-	recordAccountTmpl = template.Must(template.New("record-account").Parse(`<!doctype html><html><head><meta charset="utf-8"><title>Account</title></head><body>
-<div id="account">Synthetic account FP-ACCOUNT-1</div>
-<script>
-(function () {
-  var auth = {headers: {"Authorization": "Bearer " + {{.Token}}}};
-  fetch({{.List}}, auth)
-    .then(function (r) { return r.json(); })
-    .then(function () { return fetch({{.PDF}}, auth); })
-    .then(function (r) { return r.arrayBuffer(); })
-    .finally(function () {
-      var p = document.createElement("p");
-      p.id = "done"; p.textContent = "done";
-      document.body.appendChild(p);
-    });
-})();
-</script></body></html>`))
+	// recordAccountTmpl (mode record) is a single-page app shell: the
+	// invoice list, then the first PDF, are loaded by the app bundle served
+	// from shared storage (HostStatic) with a bearer token the page
+	// inlines; without that bundle the page stays empty (J2, Wecasa). It
+	// also tries another path of the storage host, which must be blocked.
+	recordAccountTmpl = template.Must(template.New("record-account").Parse(`<!doctype html><html><head><meta charset="utf-8"><title>Account</title>
+<script>window.__FP = {token: {{.Token}}, list: {{.List}}, pdf: {{.PDF}}};</script>
+<script src="https://static.fakeprovider.test/other-bucket/evil.js"></script>
+<script src="https://static.fakeprovider.test/app/list.js"></script>
+</head><body>
+<div id="account">Synthetic account FP-ACCOUNT-1</div></body></html>`))
 
 	accountTmpl = template.Must(template.New("account").Parse(`<!doctype html><html><head><meta charset="utf-8"><title>Account</title></head><body>
 <div id="account">Synthetic account FP-ACCOUNT-1</div></body></html>`))

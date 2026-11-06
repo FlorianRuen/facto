@@ -72,6 +72,8 @@ func TestRecord_RefusesBeforeAnyBrowser(t *testing.T) {
 		{"url off allowlist", []string{"record", "https://evil.test/", "-o", out, "--allow", "www.example.test"}, true, "", 2, "allowed domain"},
 		{"url with userinfo", []string{"record", "https://u:p@www.example.test/", "-o", out, "--allow", "www.example.test"}, true, "", 2, "user info"},
 		{"url other port", []string{"record", "https://www.example.test:8443/", "-o", out, "--allow", "www.example.test"}, true, "", 2, "port 443"},
+		{"static whole host", []string{"record", "https://www.example.test/", "-o", out, "--allow", "www.example.test", "--allow-static", "https://storage.googleapis.com/"}, true, "", 2, "--allow-static"},
+		{"static http", []string{"record", "https://www.example.test/", "-o", out, "--allow", "www.example.test", "--allow-static", "http://cdn.example.test/app/"}, true, "", 2, "--allow-static"},
 		{"bad timeout", []string{"record", "https://www.example.test/", "-o", out, "--allow", "www.example.test", "--timeout", "-1s"}, true, "", 2, "--timeout"},
 		{"synced folder", []string{"record", "https://www.example.test/", "-o", filepath.Join(dropbox, "Dropbox", "x.har"), "--allow", "www.example.test"}, true, dropbox, 2, "sync"},
 	}
@@ -126,5 +128,20 @@ func TestWriteRecording_Private(t *testing.T) {
 	}
 	if err := fsx.CheckPrivate(p); err != nil || fi.Size() == 0 {
 		t.Fatalf("recording %v size %d: %v", fi.Mode(), fi.Size(), err)
+	}
+}
+
+func TestRecordStatic_FlagAndConnectorMerged(t *testing.T) {
+	t.Parallel()
+	s := newSandbox(t)
+	e := s.env()
+	c := &synthConn{}
+	e.Connectors = c.catalog()
+	got, err := recordStatic(e, recordFlags{connector: synthID, static: []string{"https://cdn.synthlogin.example/app/"}})
+	if err != nil {
+		t.Fatalf("recordStatic: %v", err)
+	}
+	if !slices.Equal(got, []string{"https://cdn.synthlogin.example/app/"}) {
+		t.Fatalf("static = %q", got)
 	}
 }

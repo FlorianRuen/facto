@@ -269,7 +269,7 @@ func (o *Orchestrator) runSteps(ctx context.Context, c connector.Connector, p co
 	}
 	var lb *loginBrowser
 	if o.browser != nil {
-		lb = newLoginBrowser(o.browser, info.AllowedDomains)
+		lb = newLoginBrowser(o.browser, info.AllowedDomains, info.BrowserStatic)
 		env.Browser = lb
 	}
 	if !o.loginOnly {

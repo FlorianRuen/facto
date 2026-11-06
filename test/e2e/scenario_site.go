@@ -166,7 +166,7 @@ func (r RequestExpect) validate(k string) error {
 		return fmt.Errorf("%s: negative count", k)
 	case r.Method != "" && !slices.Contains([]string{"GET", "POST", "HEAD"}, r.Method):
 		return fmt.Errorf("%s.method: want GET, POST or HEAD", k)
-	case r.Host != "" && !slices.Contains([]string{HostWWW, HostSSO, EvilHost}, r.Host):
+	case r.Host != "" && !slices.Contains([]string{HostWWW, HostSSO, HostStatic, EvilHost}, r.Host):
 		return fmt.Errorf("%s.host: %q is not served by the fake site", k, r.Host)
 	case r.Status != 0 && (r.Status < 100 || r.Status > 599):
 		return fmt.Errorf("%s.status: out of range", k)

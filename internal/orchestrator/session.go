@@ -128,6 +128,7 @@ func configNote(id string) string {
 type loginBrowser struct {
 	pool    connector.BrowserPool
 	allowed []string
+	static  []string
 
 	mu       sync.Mutex
 	done     bool
@@ -136,12 +137,12 @@ type loginBrowser struct {
 
 var _ connector.BrowserPool = (*loginBrowser)(nil)
 
-func newLoginBrowser(pool connector.BrowserPool, allowed []string) *loginBrowser {
-	return &loginBrowser{pool: pool, allowed: slices.Clone(allowed)}
+func newLoginBrowser(pool connector.BrowserPool, allowed, static []string) *loginBrowser {
+	return &loginBrowser{pool: pool, allowed: slices.Clone(allowed), static: slices.Clone(static)}
 }
 
 // Launch launches a browser restricted to the connector's
-// Info().AllowedDomains, whatever opts says. After Login it returns
+// Info().AllowedDomains and Info().BrowserStatic, whatever opts says. After Login it returns
 // errLoginOnly without reaching the pool.
 //
 // l.mu is held while the pool launches, so that finish never misses a
@@ -154,7 +155,7 @@ func (l *loginBrowser) Launch(ctx context.Context, opts connector.LaunchOptions)
 	if l.done {
 		return nil, errLoginOnly
 	}
-	b, err := l.pool.Launch(ctx, connector.LaunchOptions{AllowedDomains: slices.Clone(l.allowed), Visible: opts.Visible})
+	b, err := l.pool.Launch(ctx, connector.LaunchOptions{AllowedDomains: slices.Clone(l.allowed), Static: slices.Clone(l.static), Visible: opts.Visible})
 	if err != nil {
 		return nil, fmt.Errorf("launch browser: %w", err)
 	}

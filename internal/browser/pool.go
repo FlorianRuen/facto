@@ -458,18 +458,19 @@ func (p *Pool) Launch(ctx context.Context, opts connector.LaunchOptions) (connec
 // runs; the caller removes the profile.
 func (p *Pool) launchOn(ctx context.Context, profile, area string, opts connector.LaunchOptions) (*PoolBrowser, error) {
 	domains := slices.Clone(opts.AllowedDomains)
-	cmd, err := p.prepare(profile, area, domains, opts.Visible)
+	static := slices.Clone(opts.Static)
+	cmd, err := p.prepare(profile, area, domains, static, opts.Visible)
 	if err != nil {
 		return nil, err
 	}
 	lctx, cancel := linkedContext(ctx, p.ctx)
-	proc, page, err := p.startPage(lctx, cmd, domains)
+	proc, page, err := p.startPage(lctx, cmd, domains, static)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
 	b := &PoolBrowser{
-		pool: p, profile: profile, area: area, domains: domains, launchCtx: ctx,
+		pool: p, profile: profile, area: area, domains: domains, static: static, launchCtx: ctx,
 		proc: proc, page: page, cancel: cancel,
 		done: make(chan struct{}),
 	}
@@ -543,7 +544,7 @@ func (p *Pool) removeProfile(dir string) error {
 // prepare builds the vetted Command for profile and the private area
 // (TMPDIR there only when Chrome's SingletonSocket path fits; otherwise
 // the inherited TMPDIR, which Prepare checks in turn).
-func (p *Pool) prepare(profile, area string, domains []string, visible bool) (Command, error) {
+func (p *Pool) prepare(profile, area string, domains, static []string, visible bool) (Command, error) {
 	tmp := ""
 	if area != "" && socketPathFits(area) {
 		tmp = area
@@ -553,6 +554,7 @@ func (p *Pool) prepare(profile, area string, domains []string, visible bool) (Co
 		privateDir:     area,
 		tempDir:        tmp,
 		AllowedDomains: domains,
+		Static:         static,
 		Visible:        visible,
 		AllowProxy:     ProxyAllowed(p.host.LookupEnv),
 	}, p.flags)
@@ -560,7 +562,7 @@ func (p *Pool) prepare(profile, area string, domains []string, visible bool) (Co
 
 // startPage starts the browser with ctx as its lifetime and opens the login
 // page. On error the browser is killed and reaped before it returns.
-func (p *Pool) startPage(ctx context.Context, cmd Command, domains []string) (Process, *Page, error) {
+func (p *Pool) startPage(ctx context.Context, cmd Command, domains, static []string) (Process, *Page, error) {
 	if p.start == nil {
 		return nil, nil, fmt.Errorf("%w: no browser starter on %s", ErrLaunchFailed, runtime.GOOS)
 	}
@@ -570,7 +572,7 @@ func (p *Pool) startPage(ctx context.Context, cmd Command, domains []string) (Pr
 	if err != nil {
 		return nil, nil, p.classify(ctx, stderr, fmt.Errorf("%w: %w", ErrLaunchFailed, err))
 	}
-	page, err := NewPage(ctx, proc.Client(), PageOptions{AllowedDomains: domains, Log: p.log})
+	page, err := NewPage(ctx, proc.Client(), PageOptions{AllowedDomains: domains, Static: static, Log: p.log})
 	if err != nil {
 		_ = proc.Close() // kill and reap; the setup error is the one reported
 		return nil, nil, p.classify(ctx, stderr, err)
@@ -648,6 +650,7 @@ type PoolBrowser struct {
 	profile string
 	area    string // private area next to the profile; "" off Linux
 	domains []string
+	static  []string // path-scoped static allowlist (static.go)
 	// launchCtx is the Launch context: it bounds every browser of the
 	// lease, the visible one of RelaunchVisible included.
 	launchCtx context.Context
@@ -744,7 +747,7 @@ func (b *PoolBrowser) RelaunchVisible(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("relaunch browser: %w", err)
 	}
-	cmd, err := b.pool.prepare(b.profile, b.area, b.domains, true)
+	cmd, err := b.pool.prepare(b.profile, b.area, b.domains, b.static, true)
 	if err != nil {
 		return err
 	}
@@ -783,7 +786,7 @@ func (b *PoolBrowser) relaunchLocked(ctx context.Context, cmd Command) (replaced
 		rcancel()
 		return true, err
 	}
-	proc, page, err := b.pool.startPage(rctx, cmd, b.domains)
+	proc, page, err := b.pool.startPage(rctx, cmd, b.domains, b.static)
 	if err != nil {
 		rcancel()
 		return true, err

@@ -39,6 +39,7 @@ type recordFlags struct {
 	config         string
 	out            string
 	allow          []string
+	static         []string
 	connector      string
 	until          string
 	timeout        time.Duration
@@ -94,6 +95,7 @@ func newRecordCmd(ctx context.Context, e env) *cobra.Command {
 	fl := cmd.Flags()
 	fl.StringVarP(&f.out, "out", "o", "", "HAR file to write (required; must end in .har, outside any git work tree)")
 	fl.StringSliceVar(&f.allow, "allow", nil, "allowed domain (repeatable; same syntax as a connector's allowed domains, e.g. www.example.fr, *.example.fr)")
+	fl.StringSliceVar(&f.static, "allow-static", nil, "allow GET of app files under one exact https path prefix of a shared host, e.g. https://storage.googleapis.com/<bucket>/ (repeatable; never navigable, never sent data)")
 	fl.StringVar(&f.connector, "connector", "", "use the allowed domains of this shipped connector")
 	fl.StringVar(&f.until, "until", "", "CSS selector: stop once it is visible (default: Enter or window closed)")
 	fl.DurationVar(&f.timeout, "timeout", defaultRecordTimeout, "stop after this long")
@@ -128,6 +130,10 @@ func recordRun(ctx context.Context, e env, f recordFlags, rawURL string, stdin i
 	if err != nil {
 		return usage(err)
 	}
+	static, err := recordStatic(e, f)
+	if err != nil {
+		return usage(err)
+	}
 	if err := checkRecordURL(rawURL, domains); err != nil {
 		return usage(err)
 	}
@@ -153,7 +159,7 @@ func recordRun(ctx context.Context, e env, f recordFlags, rawURL string, stdin i
 	}
 
 	file, err := recordWith(ctx, e, cfg, recordDeps{
-		url: rawURL, domains: domains, until: f.until, timeout: f.timeout,
+		url: rawURL, domains: domains, static: static, until: f.until, timeout: f.timeout,
 		exe: exe, hooks: hooks, log: log, stdin: stdin, stderr: stderr,
 	})
 	if err != nil {
@@ -181,6 +187,7 @@ func recordRun(ctx context.Context, e env, f recordFlags, rawURL string, stdin i
 type recordDeps struct {
 	url, until string
 	domains    []string
+	static     []string
 	timeout    time.Duration
 	exe        string
 	hooks      runHooks
@@ -200,7 +207,7 @@ func recordWith(ctx context.Context, e env, cfg *config.Config, d recordDeps) (f
 		return nil, err
 	}
 	defer func() { err = errors.Join(err, closeErr("browser pool", pool.Close())) }()
-	b, err := pool.Launch(ctx, connector.LaunchOptions{AllowedDomains: d.domains, Visible: !d.hooks.Headless})
+	b, err := pool.Launch(ctx, connector.LaunchOptions{AllowedDomains: d.domains, Static: d.static, Visible: !d.hooks.Headless})
 	if err != nil {
 		return nil, fmt.Errorf("launch browser: %w", err)
 	}
@@ -316,6 +323,30 @@ func recordDomains(e env, f recordFlags) ([]string, error) {
 		return nil, fmt.Errorf("--allow: %w", err)
 	}
 	return domains, nil
+}
+
+// recordStatic returns the shipped connector's BrowserStatic, then
+// --allow-static, validated like the browser does (browser.ParseStatic).
+func recordStatic(e env, f recordFlags) ([]string, error) {
+	var out []string
+	if f.connector != "" {
+		shipped, err := shippedConnectors(e)
+		if err != nil {
+			return nil, fmt.Errorf("connectors: %w", err)
+		}
+		if c, ok := shipped.Get(f.connector); ok {
+			out = append(out, c.Info().BrowserStatic...)
+		}
+	}
+	for _, s := range f.static {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	if _, err := browser.ParseStatic(out); err != nil {
+		return nil, fmt.Errorf("--allow-static: %w", err)
+	}
+	return out, nil
 }
 
 // checkRecordURL applies the browser Navigate rules early, so a bad URL is

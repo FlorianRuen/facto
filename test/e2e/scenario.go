@@ -136,9 +136,14 @@ var Modes = []string{
 // Hosts served by the fake site. EvilHost is off every allowlist: the login
 // page references it so that a browser leak shows in the request log.
 const (
-	HostWWW  = "www.fakeprovider.test"
-	HostSSO  = "sso.fakeprovider.test"
-	EvilHost = "evil.test"
+	HostWWW = "www.fakeprovider.test"
+	HostSSO = "sso.fakeprovider.test"
+	// HostStatic is shared storage (J2): the record-mode account page loads
+	// its app bundle from StaticAppPath there, which the domain allowlist
+	// cannot cover without allowing the whole host.
+	HostStatic    = "static.fakeprovider.test"
+	StaticAppPath = "/app/"
+	EvilHost      = "evil.test"
 )
 
 // FakeSite configures the scenario's fake site.
