@@ -2,6 +2,8 @@ package fixtures
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -45,6 +47,9 @@ func walk(dir string) ([]string, error) {
 		rel, err := filepath.Rel(dir, p)
 		if err != nil {
 			return fmt.Errorf("relative path: %w", err)
+		}
+		if rel == ManifestName {
+			return nil
 		}
 		files = append(files, filepath.ToSlash(rel))
 		return nil
@@ -173,6 +178,10 @@ func SanitizeTree(ctx context.Context, dir string, key []byte) (SanitizeResult, 
 			return res, fmt.Errorf("%w: %s", ErrNotText, rel)
 		}
 	}
+	done, err := readManifest(dir)
+	if err != nil {
+		return res, err
+	}
 	s := NewSanitizer(key)
 	for _, rel := range files {
 		if t, ok := texts[rel]; ok {
@@ -189,6 +198,10 @@ func SanitizeTree(ctx context.Context, dir string, key []byte) (SanitizeResult, 
 		if !ok {
 			continue
 		}
+		if done[rel] == hashOf(t) {
+			res.Unchanged = append(res.Unchanged, rel)
+			continue
+		}
 		out := s.Text(t)
 		if out == t {
 			res.Unchanged = append(res.Unchanged, rel)
@@ -198,6 +211,9 @@ func SanitizeTree(ctx context.Context, dir string, key []byte) (SanitizeResult, 
 			return res, fmt.Errorf("fixtures: write %s: %w", rel, err)
 		}
 		res.Rewritten = append(res.Rewritten, rel)
+	}
+	if err := writeManifest(ctx, root, dir, files, texts); err != nil {
+		return res, err
 	}
 	return res, nil
 }
@@ -238,6 +254,56 @@ func MkdirPrivate(dir string) error {
 	defer func() { _ = root.Close() }()
 	if err := root.MkdirPrivate(filepath.Base(dir)); err != nil {
 		return fmt.Errorf("fixtures: %w", err)
+	}
+	return nil
+}
+
+// ManifestName is the file sanitize.sh writes next to the fixtures: one
+// "<sha256>  <file>" line per sanitized text file. A file whose content
+// still has that hash is not sanitized again: keyed replacements are not
+// recognisable by a new process, and a rerun would shift dates and
+// amounts once more.
+const ManifestName = ".sanitized"
+
+func hashOf(t string) string {
+	sum := sha256.Sum256([]byte(t))
+	return hex.EncodeToString(sum[:])
+}
+
+// readManifest returns file -> hash; a missing manifest is empty.
+func readManifest(dir string) (map[string]string, error) {
+	out := map[string]string{}
+	data, err := readIn(dir, ManifestName)
+	if errors.Is(err, fs.ErrNotExist) {
+		return out, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for line := range strings.SplitSeq(string(data), "\n") {
+		h, name, ok := strings.Cut(line, "  ")
+		if ok && len(h) == 64 {
+			out[name] = h
+		}
+	}
+	return out, nil
+}
+
+// writeManifest records the hash of every text file as it is now on disk.
+func writeManifest(ctx context.Context, root *fsx.Root, dir string, files []string, texts map[string]string) error {
+	var b strings.Builder
+	for _, rel := range files {
+		if _, ok := texts[rel]; !ok {
+			continue
+		}
+		data, err := readIn(dir, rel)
+		if err != nil {
+			return err
+		}
+		b.WriteString(hashOf(string(data)) + "  " + rel + "\n")
+	}
+	if err := root.WriteAtomic(ctx, ManifestName, []byte(b.String())); err != nil {
+		return fmt.Errorf("fixtures: write %s: %w", ManifestName, err)
 	}
 	return nil
 }

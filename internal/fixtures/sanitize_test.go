@@ -196,3 +196,69 @@ func TestSanitize_WecasaShapedOrderOnePass(t *testing.T) {
 		t.Errorf("scan: %v", f)
 	}
 }
+
+// TestSanitize_JSONInsideHTMLScripts (J2, Wecasa home page): JSON blocks
+// embedded in a page (<script type="application/ld+json">, application/json)
+// get the per-field JSON rules too.
+func TestSanitize_JSONInsideHTMLScripts(t *testing.T) {
+	t.Parallel()
+	in := `<html><head><script type="application/ld+json">{"@type":"Organization","telephone":"+33 1 84 80 12 34","address":{"streetAddress":"12 rue Réaumur","postalCode":"75002"},"geo":{"latitude":48.8661,"longitude":2.3512}}</script>` +
+		`<script type="application/json" id="data">{"user":{"phone":"07 81 45 22 19","zip_code":"31000"}}</script></head><body>ok</body></html>`
+	s := fixtures.NewSanitizer([]byte("k"))
+	got := s.Text(in)
+	for _, leak := range []string{"84 80 12 34", "Réaumur", "75002", "48.8661", "2.3512", "81 45 22 19", "31000"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("leak %q:\n%s", leak, got)
+		}
+	}
+	for _, keep := range []string{`<script type="application/ld+json">{"@type":"Organization"`, `"telephone":`, `id="data">`, "<body>ok</body>"} {
+		if !strings.Contains(got, keep) {
+			t.Errorf("structure %q lost:\n%s", keep, got)
+		}
+	}
+	if f := fixtures.ScanText("p.html", got); len(f) != 0 {
+		t.Errorf("scan: %v\n%s", f, got)
+	}
+	if again := s.Text(got); again != got {
+		t.Errorf("not idempotent")
+	}
+}
+
+// TestSanitize_FreeTextFieldsReplaced: any field named like a comment
+// (pro_comment, customer_review, door_instructions) is replaced whole.
+func TestSanitize_FreeTextFieldsReplaced(t *testing.T) {
+	t.Parallel()
+	in := `{"pro_comment":"Merci Camille, à mardi au 3e étage","customer_review":"super","door_instructions":"code 4B12","title":"Ménage"}`
+	got := fixtures.NewSanitizer([]byte("k")).Text(in)
+	for _, leak := range []string{"Camille", "étage", "super", "4B12"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("leak %q: %s", leak, got)
+		}
+	}
+	if !strings.Contains(got, `"title":"Ménage"`) {
+		t.Errorf("catalog text lost: %s", got)
+	}
+}
+
+// TestSanitize_OnlyMoneyAndPersonalValues (J2, Wecasa): ratios and ratings
+// are not amounts and keep their decimals, ids inside URLs are kept (they
+// are object ids, not personal data); money, references and dates are
+// replaced. Cross-run stability is the manifest's job
+// (TestSanitizeTree_SecondRunIsNoOp).
+func TestSanitize_OnlyMoneyAndPersonalValues(t *testing.T) {
+	t.Parallel()
+	in := `{"weekly_recurrence":0.8,"rating":4.75,"amount_cents":8412,"price":"84,12 €","total":84.12,` +
+		`"profile_picture":"https://www.wecasa.fr/rails/active_storage/blobs/redirect/eyJfcmFpbHMiOnt9--1234567890abcdef/p.jpg",` +
+		`"appointment":"2026-09-29T16:00:00.000+02:00","contract_number":"4012345678"}`
+	got := fixtures.NewSanitizer([]byte("k")).Text(in)
+	for _, keep := range []string{`"weekly_recurrence":0.8`, `"rating":4.75`, "redirect/eyJfcmFpbHMiOnt9--1234567890abcdef/p.jpg"} {
+		if !strings.Contains(got, keep) {
+			t.Errorf("non-personal value changed, want %s in %s", keep, got)
+		}
+	}
+	for _, leak := range []string{"8412", "84,12", "84.12", "4012345678", "2026-09-29"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("leak %q in %s", leak, got)
+		}
+	}
+}

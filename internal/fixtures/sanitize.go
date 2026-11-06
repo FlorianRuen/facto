@@ -126,10 +126,10 @@ func normalizeKey(k string) string {
 var (
 	civilityRE = regexp.MustCompile(`(?i)\b(M\.|Mme|Mlle|Monsieur|Madame|Mademoiselle|Bonjour|Titulaire\s*:)\s+((?:[\p{Lu}][\p{L}'-]+\s?){1,3})`)
 	// Dates: ISO and French formats.
-	isoDateRE = regexp.MustCompile(`\b(\d{4})-(\d{2})-(\d{2})\b`)
+	isoDateRE = regexp.MustCompile(`\b(\d{4})-(\d{2})-(\d{2})(?:\b|T)`)
 	frDateRE  = regexp.MustCompile(`\b(\d{2})/(\d{2})/(\d{4})\b`)
 	// Amounts with a decimal comma or point and two decimals.
-	amountRE = regexp.MustCompile(`\b(\d{1,7})([.,])(\d{2})\b`)
+	amountRE = regexp.MustCompile(`\b(\d{1,7})([.,])(\d{2})(\s?(?:€|EUR|euros?)\b|\s?€)`)
 	// JSON integer cents fields.
 	centsRE = regexp.MustCompile(`("[A-Za-z_]*(?:cents|amount|montant|total|price|prix)[A-Za-z_]*"\s*:\s*)(-?\d+)\b`)
 	// Long digit runs: references, contract and customer numbers.
@@ -143,7 +143,34 @@ func (s *Sanitizer) Text(text string) string {
 	if out, ok := s.jsonText(text); ok {
 		return out
 	}
-	return s.freeText(text)
+	return s.htmlText(text)
+}
+
+// jsonScriptRE is a <script> whose type is JSON (application/json,
+// application/ld+json): group 1 opening tag, 2 content, 3 closing tag.
+var jsonScriptRE = regexp.MustCompile(`(?is)(<script\b[^>]*\btype\s*=\s*["']?application/(?:ld\+)?json["']?[^>]*>)(.*?)(</script\s*>)`)
+
+// htmlText sanitizes the JSON blocks of a page with the JSON field rules
+// and everything around them with the text rules.
+func (s *Sanitizer) htmlText(text string) string {
+	locs := jsonScriptRE.FindAllStringSubmatchIndex(text, -1)
+	if len(locs) == 0 {
+		return s.freeText(text)
+	}
+	var b strings.Builder
+	prev := 0
+	for _, l := range locs {
+		b.WriteString(s.freeText(text[prev:l[3]])) // up to the end of the opening tag
+		body := text[l[4]:l[5]]
+		if out, ok := s.jsonText(body); ok {
+			b.WriteString(out)
+		} else {
+			b.WriteString(s.freeText(body))
+		}
+		prev = l[5]
+	}
+	b.WriteString(s.freeText(text[prev:]))
+	return b.String()
 }
 
 // freeText applies the text rules (HTML, plain text, one JSON string).
@@ -196,7 +223,7 @@ func (s *Sanitizer) freeText(text string) string {
 	text = isoDateRE.ReplaceAllStringFunc(text, func(m string) string {
 		p := isoDateRE.FindStringSubmatch(m)
 		y, mo, d := s.shiftDate(p[1], p[2], p[3])
-		return y + "-" + mo + "-" + d
+		return y + "-" + mo + "-" + d + strings.TrimPrefix(m, p[1]+"-"+p[2]+"-"+p[3])
 	})
 	text = frDateRE.ReplaceAllStringFunc(text, func(m string) string {
 		p := frDateRE.FindStringSubmatch(m)
@@ -209,9 +236,9 @@ func (s *Sanitizer) freeText(text string) string {
 	})
 	text = amountRE.ReplaceAllStringFunc(text, func(m string) string {
 		p := amountRE.FindStringSubmatch(m)
-		return p[1] + p[2] + s.centsOf(p[1], p[3])
+		return p[1] + p[2] + s.centsOf(p[1], p[3]) + p[4]
 	})
-	text = digitsRE.ReplaceAllStringFunc(text, func(m string) string {
+	text = replaceDigitRuns(text, func(m string) string {
 		if allZeroDigits(m) || looksLikeTimestamp(m) {
 			return m
 		}
@@ -416,6 +443,7 @@ func syntheticPhoneLike(m, nn string) string {
 // Personal JSON fields, by normalized name (normalizeKey).
 var (
 	zipFields    = []string{"zip", "zipcode", "postcode", "postalcode", "codepostal", "cp"}
+	streetFields = []string{"streetname", "street", "rue", "voie", "streetaddress"}
 	streetNumber = []string{"streetnumber", "housenumber", "numerovoie", "numero"}
 	latFields    = []string{"lat", "latitude"}
 	lngFields    = []string{"lng", "lon", "long", "longitude"}
@@ -502,6 +530,14 @@ func (s *Sanitizer) jsonNumber(key, n string, x json.Number) json.Number {
 	case slices.Contains(zipFields, n):
 		return json.Number("0")
 	}
+	if !moneyField(n) && !strings.Contains(n, "id") && !strings.Contains(n, "number") && !strings.Contains(n, "ref") {
+		return x
+	}
+	if moneyField(n) {
+		if e, c, ok := strings.Cut(string(x), "."); ok && len(c) == 2 {
+			return json.Number(e + "." + s.centsOf(strings.TrimPrefix(e, "-"), c))
+		}
+	}
 	snippet := `"` + key + `":` + string(x)
 	out := s.freeText(snippet)
 	if _, lit, ok := strings.Cut(out, `":`); ok && lit != string(x) {
@@ -527,7 +563,7 @@ func (s *Sanitizer) jsonString(n, v string) string {
 		return "Ville-Exemple"
 	case n == "address" || n == "adresse" || n == "fulladdress" || n == "formattedaddress" || n == "address1" || n == "address2" || n == "addressline1" || n == "addressline2":
 		return "1 rue de l'Exemple, 00000 Ville-Exemple"
-	case n == "streetname" || n == "street" || n == "rue" || n == "voie":
+	case slices.Contains(streetFields, n):
 		return "rue de l'Exemple"
 	case phoneField(n):
 		if syntheticPhone(v) {
@@ -539,9 +575,58 @@ func (s *Sanitizer) jsonString(n, v string) string {
 			return v
 		}
 		return s.memoized("email", strings.ToLower(v), func(k int) string { return fmt.Sprintf("user-%04d@example.org", k) })
-	case n == "comments" || n == "comment" || n == "message" || n == "note" || n == "notes" || n == "addressdetails" || n == "instructions":
+	case freeTextField(n):
 		// Free text written by a person: never kept.
 		return "Synthetic comment."
 	}
 	return s.freeText(v)
 }
+
+// freeTextField reports a field holding text a person wrote (a comment, a
+// review, a message, access instructions): never kept, whatever it holds.
+func freeTextField(n string) bool {
+	for _, suffix := range []string{"comment", "comments", "message", "messages", "note", "notes", "review", "instructions", "addressdetails", "feedback", "description"} {
+		if n == suffix || strings.HasSuffix(n, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// moneyField reports a field holding an amount (its cents are replaced).
+func moneyField(n string) bool {
+	for _, w := range []string{"amount", "price", "total", "cents", "montant", "prix", "cost", "fee", "fees", "tax", "balance", "paid", "due"} {
+		if strings.Contains(n, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// replaceDigitRuns applies fn to every run of 6+ digits that is not glued
+// to a letter: a run inside a hash-like token (digits followed by hex
+// letters, as in storage blob ids) is an opaque object id, not a
+// reference a person has.
+func replaceDigitRuns(text string, fn func(string) string) string {
+	locs := digitsRE.FindAllStringIndex(text, -1)
+	if len(locs) == 0 {
+		return text
+	}
+	var b strings.Builder
+	prev := 0
+	for _, l := range locs {
+		b.WriteString(text[prev:l[0]])
+		run := text[l[0]:l[1]]
+		glued := (l[0] > 0 && isLetter(text[l[0]-1])) || (l[1] < len(text) && isLetter(text[l[1]]))
+		if glued {
+			b.WriteString(run)
+		} else {
+			b.WriteString(fn(run))
+		}
+		prev = l[1]
+	}
+	b.WriteString(text[prev:])
+	return b.String()
+}
+
+func isLetter(c byte) bool { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') }

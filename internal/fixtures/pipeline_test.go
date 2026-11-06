@@ -175,3 +175,39 @@ func writeBytes(t *testing.T, dir, name string, b []byte) {
 		t.Fatal(err)
 	}
 }
+
+// TestSanitizeTree_SecondRunIsNoOp (J2, Wecasa): running sanitize.sh again
+// on its own output rewrites nothing (the .sanitized manifest records each
+// file's hash), while a file changed since is sanitized again.
+func TestSanitizeTree_SecondRunIsNoOp(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	write(t, dir, "a.json", `{"weekly_recurrence":0.8,"amount_cents":8412,"date":"2026-03-14","email":"a.person@gmail.com"}`)
+	write(t, dir, "b.html", `<p>Bonjour Camille Rousseau, contrat 4012345678</p>`)
+	first, err := fixtures.SanitizeTree(t.Context(), dir, []byte("k"))
+	if err != nil || len(first.Rewritten) != 2 {
+		t.Fatalf("first run = %+v, %v", first, err)
+	}
+	rt, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rt.Close() }()
+	a1, _ := rt.ReadFile("a.json")
+	second, err := fixtures.SanitizeTree(t.Context(), dir, []byte("k"))
+	if err != nil || len(second.Rewritten) != 0 {
+		t.Fatalf("second run = %+v, %v", second, err)
+	}
+	a2, _ := rt.ReadFile("a.json")
+	if !bytes.Equal(a1, a2) {
+		t.Fatalf("second run changed a.json:\n%s\n%s", a1, a2)
+	}
+	write(t, dir, "b.html", `<p>Bonjour Marie Lambert</p>`)
+	third, err := fixtures.SanitizeTree(t.Context(), dir, []byte("k"))
+	if err != nil || len(third.Rewritten) != 1 || third.Rewritten[0] != "b.html" {
+		t.Fatalf("third run = %+v, %v", third, err)
+	}
+	if found, err := fixtures.ScanTree(dir); err != nil || len(found) != 0 {
+		t.Fatalf("scan = %v, %v", found, err)
+	}
+}
