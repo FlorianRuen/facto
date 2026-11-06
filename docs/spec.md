@@ -293,7 +293,7 @@ Ileo is the first connector to write (simple login), EDF and Bouygues follow, We
 4. Note mandatory headers (CSRF, `Authorization`, origin) and session lifetime.
 5. Anonymize excerpts into `testdata/` and fill `docs/connectors/<id>.md` (template below).
 
-Internal tool to build: `facto record <url>` opens a controlled browser and records a filtered HAR (no passwords, no cookies), so contributors can prepare a connector without doing it all by hand.
+`facto record <url> --out <file.har> (--connector <id> | --allow <domain>...) [--allow-static https://<host>/<prefix>/]` (J2) does steps 1 to 4 with the hardened login browser: a visible window on a disposable 0700 profile, CDP over the pipe, only the allowed domains reachable. The user logs in and opens one invoice by hand; the recording stops on Enter, when the window closes, when `--until <selector>` shows, or after `--timeout` (30 min). Every entry is redacted in memory before anything is written (`internal/har`): values of `Cookie`, `Set-Cookie`, `Authorization` and every header named like a token, key, CSRF or session; every cookie value; password, OTP, token, CSRF and session fields of queries, forms and JSON bodies; login identifiers sent in request bodies; JWTs, bearer credentials and password input values anywhere; binary bodies (PDFs: type and size only). Every value seen in one of those places is then removed from the whole file wherever else it appears (a login page that inlines the password, an SPA that inlines its token). The file is written 0600, never inside a git work tree or a synced folder; facto record reads no secret reference and saves no session. Personal data in pages is kept: step 5 is `go run ./scripts/harslim`, `scripts/fixtures/sanitize.sh`, `scripts/fixtures/scan.sh` (must print `PII scan: 0 findings`) and `go run ./scripts/fakepdf` (skill `fixtures-from-har`). Limit: only the login page and its frames are recorded (not workers, service workers or pop-ups). A site whose app bundle lives on shared storage (Wecasa: `storage.googleapis.com/<bucket>/`) needs `--allow-static` with that exact prefix (connectors: `Info().BrowserStatic`): GET subresources under it only, never a page (ADR 0008).
 
 ### Ileo (water, Métropole Européenne de Lille)
 
@@ -607,7 +607,7 @@ browser:
 | `facto doctor <connector>` | Check the real flow and diagnose breakage |
 | `facto export --year N --csv` | Document summary for bookkeeping |
 | `facto schedule monthly \| off` | Install or remove the scheduled task |
-| `facto record <url>` | Record a cleaned HAR to write a connector |
+| `facto record <url> --out <file.har> --connector <id> \| --allow <domain>` | Record a redacted HAR to write a connector (J2) |
 
 Exit codes: `0` all ok, `1` at least one connector in `needs_login`, `broken`, `auth_failed`, `rate_limited` or `interrupted` (or the run itself failed or was canceled), `2` configuration or usage error (invalid `config.yaml`, unknown command or flag). Useful for scripts.
 

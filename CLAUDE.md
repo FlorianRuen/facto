@@ -21,6 +21,7 @@ Read it before any architectural change.
 | `make release-e2e-check` | Fails if the release build (exact `.goreleaser.yaml` flags) contains e2e-only code; prints `release-check: release build has no e2e-only code` (run by `verify`) |
 | `make lint-selftest` | Proves the openpgp depguard ban and the `cdploopback` / `NewPinned` caller rules are live (run by `verify`) |
 | `make e2e-browser-windows` | Windows only: real-Chrome `TestChromeWindows_*` checks (CDP port on 127.0.0.1 only); needs `FACTO_E2E_CHROME` |
+| `go run ./scripts/harslim`, `scripts/fixtures/sanitize.sh`, `scripts/fixtures/scan.sh`, `go run ./scripts/fakepdf` | Recording to fixtures (skill `fixtures-from-har`); tested by `make test` |
 
 Never invent other ways to build or test. If a target is missing, add it to the Makefile.
 

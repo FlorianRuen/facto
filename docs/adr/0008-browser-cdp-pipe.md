@@ -341,6 +341,26 @@ the pipe (the io-pipes route below bypasses this):
     out) resolves to `~NOTFOUND`, so `make e2e` never looks a real supplier up nor reaches
     it; `CheckFlagsE2E` refuses an e2e argv with an `EXCLUDE` rule. Proof:
     `TestAttack_E2EWildcardAllowlistNeverReachesRealDNS`, `TestFlagsE2E_NoNameReachesRealDNS`.
+- **Path-scoped static allowlist (J2, A11 "per-connector CDN").** Some suppliers serve
+  their single-page app bundle from shared storage (Wecasa: `storage.googleapis.com/<bucket>/`),
+  which `httpx.ParseAllowlist` refuses as a whole host because anyone can publish there.
+  Without it the app never starts and the login or invoice page stays empty. A connector
+  declares `Info().BrowserStatic` entries `https://<host>/<prefix>/` (`facto record`:
+  `--allow-static`), parsed by `browser.ParseStatic`: https only, exact host (no wildcard,
+  IP literal, loopback name or port), a non-empty path of `[A-Za-z0-9._~-]` segments ending
+  in `/`, no dot segment, escape, query, fragment or userinfo. The paused-request handler
+  continues a request to such an entry only when it is a GET or HEAD subresource (never a
+  `Document` or `WebSocket`) whose escaped path is under the prefix with no `.`/`..`
+  segment and no `%2f`, `%5c` or `%2e`; every redirect hop is checked again. `Navigate`,
+  `TypeSecret`'s origin check and `Cookies` keep the domain allowlist only, and httpx
+  never sees static entries. The host is added to the `--host-resolver-rules` exclusions
+  (never a path in a flag). The orchestrator launches login browsers with the connector's
+  `Info().BrowserStatic`, whatever the connector passes. Tests: `static_test.go` (parser,
+  prefix/escape/method/redirect/document refusals), `TestRun_BrowserStaticIsConnectorInfo`,
+  and the real-Chrome scenarios `record-fakeprovider` (bundle loads, another bucket of the
+  same host never requested) and `record-static-missing` (without the entry the page stays
+  empty). Residual risk: the bucket owner controls code that runs in the login page; the
+  same is true of any first-party script, and the bucket is named by the connector.
 - **WebRTC (J1 T27, red-team finding HIGH).** ICE traffic (STUN, TURN over UDP or TCP)
   goes straight to an IP and port the page names: neither `Fetch` nor the resolver rules
   see it, and the TURN `USERNAME` is page-chosen, a channel for anything the page can

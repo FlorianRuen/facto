@@ -209,7 +209,7 @@ func (p *fakePool) Launch(_ context.Context, opts connector.LaunchOptions) (conn
 	defer p.mu.Unlock()
 	n := len(p.browsers)
 	p.ev.add("browser-launch:%d", n)
-	p.opts = append(p.opts, connector.LaunchOptions{AllowedDomains: slices.Clone(opts.AllowedDomains), Visible: opts.Visible})
+	p.opts = append(p.opts, connector.LaunchOptions{AllowedDomains: slices.Clone(opts.AllowedDomains), Static: slices.Clone(opts.Static), Visible: opts.Visible})
 	b := &fakeBrowser{ev: p.ev, n: n}
 	p.browsers = append(p.browsers, b)
 	return b, nil

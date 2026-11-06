@@ -202,7 +202,7 @@ func (s *fakeSite) newCA(t *testing.T) tls.Certificate {
 	leafTmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(2),
 		Subject:      pkix.Name{CommonName: HostWWW},
-		DNSNames:     []string{HostWWW, HostSSO, EvilHost},
+		DNSNames:     []string{HostWWW, HostSSO, HostStatic, EvilHost},
 		NotBefore:    now.Add(-time.Hour),
 		NotAfter:     now.Add(24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
@@ -406,6 +406,8 @@ func (s *fakeSite) serve(w http.ResponseWriter, r *http.Request) {
 		s.serveWWW(sw, r)
 	case HostSSO:
 		s.serveSSO(sw, r)
+	case HostStatic:
+		serveStatic(sw, r)
 	case EvilHost:
 		// Off every allowlist: served (so a leak is logged), never linked
 		// to any state.
@@ -441,6 +443,10 @@ func (s *fakeSite) serveWWW(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/account" && r.Method == http.MethodGet:
 		if s.session(r) == nil {
 			http.Redirect(w, r, "/login", http.StatusFound)
+			return
+		}
+		if s.opts.Mode == ModeRecord {
+			s.page(w, recordAccountTmpl, s.recordAccountData())
 			return
 		}
 		s.page(w, accountTmpl, nil)
@@ -497,10 +503,16 @@ func csrfOK(r *http.Request) bool {
 func (s *fakeSite) loginForm(w http.ResponseWriter, r *http.Request, failed bool) {
 	s.hook(r)
 	tmpl := loginTmpl
-	if s.opts.Mode == ModeSiteChanged {
+	data := map[string]any{"CSRF": newCSRF(w), "Error": failed}
+	switch s.opts.Mode {
+	case ModeSiteChanged:
 		tmpl = changedLoginTmpl
+	case ModeRecord:
+		// The page logs in by itself: facto record never automates a login.
+		tmpl = recordLoginTmpl
+		data["Login"], data["Password"] = s.opts.Login, s.opts.Password
 	}
-	s.page(w, tmpl, map[string]any{"CSRF": newCSRF(w), "Error": failed})
+	s.page(w, tmpl, data)
 }
 
 func (s *fakeSite) loginPost(w http.ResponseWriter, r *http.Request) {
@@ -742,6 +754,57 @@ func (s *fakeSite) list(w http.ResponseWriter, r *http.Request) {
 	}{Invoices: out})
 }
 
+// staticListJS is the app bundle of the record-mode account page.
+const staticListJS = `(function () {
+  var c = window.__FP, base = "https://www.fakeprovider.test";
+  var auth = {headers: {"Authorization": "Bearer " + c.token}};
+  fetch(base + c.list, auth)
+    .then(function (r) { return r.json(); })
+    .then(function () { return fetch(base + c.pdf, auth); })
+    .then(function (r) { return r.arrayBuffer(); })
+    .finally(function () {
+      var p = document.createElement("p");
+      p.id = "done"; p.textContent = "done";
+      document.body.appendChild(p);
+    });
+})();
+`
+
+// serveStatic is the shared storage host: the app bundle under
+// StaticAppPath, and another bucket's script (served, so that only the
+// browser's static allowlist can keep it out). No cookie, no state.
+func serveStatic(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	switch r.URL.Path {
+	case StaticAppPath + "list.js":
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		_, _ = w.Write([]byte(staticListJS))
+	case "/other-bucket/evil.js":
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		_, _ = w.Write([]byte(`document.title = "evil bundle ran";`))
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// recordAccountData is the record-mode account page data: the list URL of
+// every seeded invoice, the first PDF URL and a bearer token minted like a
+// session (hunted by the leak checks).
+func (s *fakeSite) recordAccountData() map[string]any {
+	pdf := "/api/invoices/none/pdf"
+	if len(s.opts.Invoices) > 0 {
+		pdf = "/api/invoices/" + s.opts.Invoices[0].ID + "/pdf"
+	}
+	return map[string]any{
+		"List":  "/api/invoices?from=2000-01-01&to=2100-01-01&page=1",
+		"PDF":   pdf,
+		"Token": s.newSession(),
+	}
+}
+
 func writeJSON(w http.ResponseWriter, v any) {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -842,6 +905,41 @@ var (
 </form></body></html>`))
 
 	captchaTmpl = template.Must(template.New("captcha").Parse(pageHead + `<div id="captcha">Prove you are human (never automated)</div></body></html>`))
+
+	// recordLoginTmpl (mode record) fills the accepted credentials and
+	// submits the real login form once every off-allowlist attempt settled.
+	recordLoginTmpl = template.Must(template.New("record-login").Parse(pageHead + `<form id="login-form" hidden method="post" action="/login">
+<input type="hidden" name="csrf_token" value="{{.CSRF}}">
+<label>Login <input id="username" name="username" autocomplete="off"></label>
+<label>Password <input id="password" name="password" type="password"></label>
+<button id="login-submit" type="submit">Sign in</button>
+</form>
+<script>
+(function () {
+  var f = document.getElementById("login-form");
+  var go = function () {
+    if (f.hidden) { setTimeout(go, 20); return; }
+    document.getElementById("username").value = {{.Login}};
+    document.getElementById("password").value = {{.Password}};
+    f.requestSubmit();
+  };
+  go();
+})();
+</script></body></html>`))
+
+	// recordAccountTmpl (mode record) loads the invoice list with a bearer
+	// token, then the first PDF, then shows #done.
+	// recordAccountTmpl (mode record) is a single-page app shell: the
+	// invoice list, then the first PDF, are loaded by the app bundle served
+	// from shared storage (HostStatic) with a bearer token the page
+	// inlines; without that bundle the page stays empty (J2, Wecasa). It
+	// also tries another path of the storage host, which must be blocked.
+	recordAccountTmpl = template.Must(template.New("record-account").Parse(`<!doctype html><html><head><meta charset="utf-8"><title>Account</title>
+<script>window.__FP = {token: {{.Token}}, list: {{.List}}, pdf: {{.PDF}}};</script>
+<script src="https://static.fakeprovider.test/other-bucket/evil.js"></script>
+<script src="https://static.fakeprovider.test/app/list.js"></script>
+</head><body>
+<div id="account">Synthetic account FP-ACCOUNT-1</div></body></html>`))
 
 	accountTmpl = template.Must(template.New("account").Parse(`<!doctype html><html><head><meta charset="utf-8"><title>Account</title></head><body>
 <div id="account">Synthetic account FP-ACCOUNT-1</div></body></html>`))

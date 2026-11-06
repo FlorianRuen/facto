@@ -164,6 +164,7 @@ type Prompter interface {
 // LaunchOptions configures one browser for one login.
 type LaunchOptions struct {
 	AllowedDomains []string // connector Info().AllowedDomains
+	Static         []string // connector Info().BrowserStatic (path-scoped GET/HEAD subresources)
 	Visible        bool     // headful window; only when interactive
 }
 

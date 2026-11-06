@@ -764,3 +764,34 @@ func hasBrowserWarning(t *testing.T, out, id string) bool {
 	}
 	return false
 }
+
+// TestRun_BrowserStaticIsConnectorInfo (J2): the path-scoped static
+// allowlist of a login browser is the connector's Info().BrowserStatic,
+// whatever the connector passes in LaunchOptions.
+func TestRun_BrowserStaticIsConnectorInfo(t *testing.T) {
+	t.Parallel()
+	ev := &events{}
+	pool := &fakePool{ev: ev}
+	r := newRunRig(t, nil, withBrowser(pool))
+	pool.ev = r.ev
+	alpha := newFakeConn(r.ev, "alpha", runRef("a1", 1))
+	alpha.info.BrowserStatic = []string{"https://storage.googleapis.com/alpha-app/"}
+	alpha.onLogin = func(ctx context.Context, env connector.Env) {
+		b, err := env.Browser.Launch(ctx, connector.LaunchOptions{Static: []string{"https://storage.googleapis.com/"}})
+		if err == nil {
+			_ = b.Close()
+		}
+	}
+	if _, err := r.o.Run(t.Context(), registry(t, alpha), period2026); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	opts, _ := pool.launched()
+	if len(opts) == 0 {
+		t.Fatal("no browser launched")
+	}
+	for i, o := range opts {
+		if !slices.Equal(o.Static, alpha.info.BrowserStatic) {
+			t.Fatalf("launch %d static = %q, want the connector's Info %q", i, o.Static, alpha.info.BrowserStatic)
+		}
+	}
+}

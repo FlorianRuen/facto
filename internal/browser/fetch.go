@@ -162,6 +162,10 @@ func (p *Page) release(session string) {
 func (p *Page) stop() {
 	p.subsMu.Lock()
 	p.stopped = true
+	for _, sub := range p.taps {
+		sub.Close()
+	}
+	p.taps = nil
 	for id, w := range p.sessions {
 		for _, sub := range w.subs {
 			sub.Close()
@@ -181,8 +185,9 @@ func (p *Page) enforceCtx() (context.Context, context.CancelFunc) {
 
 // pausedRequest is the part of Fetch.requestPaused the page reads.
 type pausedRequest struct {
-	RequestID string          `json:"requestId"`
-	Request   json.RawMessage `json:"request"`
+	RequestID    string          `json:"requestId"`
+	Request      json.RawMessage `json:"request"`
+	ResourceType string          `json:"resourceType"`
 }
 
 // onRequestPaused continues an allowed request as is, and fails any other
@@ -202,7 +207,8 @@ func (p *Page) onRequestPaused(ev Event) {
 		return
 	}
 	var req struct {
-		URL string `json:"url"`
+		URL    string `json:"url"`
+		Method string `json:"method"`
 	}
 	rawURL := ""
 	if len(pr.Request) > 0 && json.Unmarshal(pr.Request, &req) == nil {
@@ -210,7 +216,7 @@ func (p *Page) onRequestPaused(ev Event) {
 	}
 	ctx, cancel := p.enforceCtx()
 	defer cancel()
-	if p.requestAllowed(rawURL) {
+	if p.requestAllowed(rawURL) || p.staticAllowed(rawURL, req.Method, pr.ResourceType) {
 		if _, err := p.c.Call(ctx, ev.SessionID, "Fetch.continueRequest", map[string]any{"requestId": pr.RequestID}); err != nil {
 			p.log.Debug("browser: continue request failed", "error", err)
 		}
@@ -241,6 +247,16 @@ func (p *Page) requestAllowed(raw string) bool {
 		return false
 	}
 	return p.allow.Allows(u.Host)
+}
+
+// staticAllowed applies the static allowlist (static.go) to a
+// subresource: never a document (top-level or frame), never a WebSocket.
+func (p *Page) staticAllowed(raw, method, resourceType string) bool {
+	switch resourceType {
+	case "Document", "WebSocket", "":
+		return false
+	}
+	return p.static.allows(raw, method)
 }
 
 // hasUnsafeChar reports a control character, a space or a backslash.

@@ -18,6 +18,7 @@ type Options struct {
 	GOOS           string   // target OS for the flags; "" means runtime.GOOS
 	ProfileDir     string   // disposable profile (A12), absolute and clean; required
 	AllowedDomains []string // connector Info().AllowedDomains (A11)
+	Static         []string // connector Info().BrowserStatic (static.go): hosts resolvable, paths never in flags
 	Visible        bool     // headful window; otherwise --headless=new
 	AllowProxy     bool     // true only when FACTO_ALLOW_PROXY is exactly "1"
 
@@ -93,10 +94,16 @@ func Flags(opts Options) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	static, err := ParseStatic(opts.Static)
+	if err != nil {
+		return nil, err
+	}
+	resolvable := slices.Concat(domains, static.Hosts())
+	slices.Sort(resolvable)
 	args := slices.Clone(baseFlags)
 	args = append(args,
 		"--user-data-dir="+opts.ProfileDir,
-		"--host-resolver-rules="+resolverRules(nil, domains),
+		"--host-resolver-rules="+resolverRules(nil, slices.Compact(resolvable)),
 	)
 	if !opts.Visible {
 		args = append(args, "--headless=new")

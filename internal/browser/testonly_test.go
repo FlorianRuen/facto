@@ -102,7 +102,9 @@ func TestFlags_TestOnlyFlagsUnreachableFromReleaseOptions(t *testing.T) {
 
 	t.Run("release Options has no extra knob", func(t *testing.T) {
 		t.Parallel()
-		want := []string{"AllowProxy", "AllowedDomains", "GOOS", "ProfileDir", "Visible"}
+		// Static (J2) is validated by ParseStatic and only adds resolver
+		// exclusions for exact hosts: no flag text comes from it.
+		want := []string{"AllowProxy", "AllowedDomains", "GOOS", "ProfileDir", "Static", "Visible"}
 		var got []string
 		rt := reflect.TypeFor[browser.Options]()
 		for i := range rt.NumField() {

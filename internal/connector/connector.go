@@ -76,6 +76,11 @@ type Info struct {
 	Kinds []DocKind
 	// AllowedDomains is the httpx allowlist: exact host or "*.host".
 	AllowedDomains []string
+	// BrowserStatic is the login browser's path-scoped static allowlist
+	// (browser.ParseStatic): "https://<host>/<prefix>/" entries the login
+	// page may GET subresources from (an app bundle on shared storage),
+	// never navigated to, never used by httpx.
+	BrowserStatic []string
 }
 
 // DocumentRef describes one supplier document before it is downloaded.

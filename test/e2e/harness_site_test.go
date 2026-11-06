@@ -151,7 +151,7 @@ func (s *sandbox) startSite(t *testing.T, sc *Scenario) {
 		}
 		env["FACTO_E2E_SECRETS_DIR"] = dir
 	}
-	if len(sc.Stdin) > 0 {
+	if len(sc.Stdin) > 0 || sc.Interactive {
 		env["FACTO_E2E_INTERACTIVE"] = "1"
 	}
 	if sc.FakeSite != nil {
@@ -197,6 +197,10 @@ func (s *sandbox) startSite(t *testing.T, sc *Scenario) {
 		env["FACTO_E2E_CA"] = writeCA(t, run.site, caDir, "ca.pem", 0o600)
 		env["FACTO_E2E_LOOPBACK"] = run.site.Addr().String()
 		env["FACTO_E2E_CHROME"] = chromePath(t)
+		if f.Mode == ModeRecord {
+			// facto record opens a visible window; CI has no display.
+			env["FACTO_E2E_HEADLESS"] = "1"
+		}
 		s.site = run
 	}
 	s.extraEnv = env

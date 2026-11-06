@@ -150,6 +150,9 @@ type runHooks struct {
 	NewHTTP orchestrator.HTTPFactory
 	// Pool adjusts the browser pool configuration; nil = none.
 	Pool func(browser.PoolConfig) (browser.PoolConfig, error)
+	// Headless makes `facto record` launch its browser headless (the e2e
+	// harness has no display); false in a release build.
+	Headless bool
 }
 
 // testRunHooks is nil in every build but -tags e2e, where an e2e-only file

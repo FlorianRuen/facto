@@ -1,0 +1,34 @@
+%PDF-1.7
+%‚„œ”
+% facto synthetic fixture (scripts/fakepdf)
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [5 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+4 0 obj
+<< /Length 246 >>
+stream
+BT /F1 11 Tf 14 TL 50 782 Td (Fournisseur Exemple SAS) Tj T* (1 rue de l'Exemple, 00000 VILLE-EXEMPLE) Tj T* (Facture FA-0000-0001) Tj T* (Client : NomA NomB) Tj T* (Total TTC : 00,00 EUR) Tj T* (Document synthetique \(scripts/fakepdf\)) Tj T* ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 4 0 R >>
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000059 00000 n 
+0000000108 00000 n 
+0000000165 00000 n 
+0000000262 00000 n 
+0000000559 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+685
+%%EOF
