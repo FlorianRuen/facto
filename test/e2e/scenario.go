@@ -51,6 +51,8 @@
 //	  fp/password: "{{canary:password}}"
 //	  fp/otp: "{{totp}}"         # current TOTP code of the site (mode totp only)
 //	stdin:                       # lines fed one by one; sets FACTO_E2E_INTERACTIVE=1
+//	interactive: true            # FACTO_E2E_INTERACTIVE=1, stdin an open empty pipe
+//	                             # (exclusive with stdin; J2 facto record)
 //	  - "{{outbox}}"             # waits for the next email code (mode email-otp only)
 //	expect:
 //	  requests:                  # assertions on the site's request log of the run
@@ -76,6 +78,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -101,6 +104,10 @@ type Scenario struct {
 	FakeSite *FakeSite         `yaml:"fakesite"`
 	Secrets  map[string]string `yaml:"secrets"`
 	Stdin    []string          `yaml:"stdin"`
+	// Interactive sets FACTO_E2E_INTERACTIVE=1 with a stdin pipe that stays
+	// open and empty until facto exits (J2, facto record: a line on stdin
+	// would stop the recording). Exclusive with Stdin.
+	Interactive bool `yaml:"interactive"`
 }
 
 // Fake site modes.
@@ -114,12 +121,16 @@ const (
 	ModeSiteChanged    = "site-changed"
 	ModeCaptcha        = "captcha"
 	ModeBadPassword    = "bad-password"
+	// ModeRecord serves pages that log in by themselves (J2, facto record):
+	// the login page fills the accepted credentials and submits, the
+	// account page fetches the invoice list and one PDF, then shows #done.
+	ModeRecord = "record"
 )
 
 // Modes lists every fake site mode.
 var Modes = []string{
 	ModePassword, ModeTOTP, ModeEmailOTP, ModeSSORedirect, ModeExpiredSession,
-	ModeRateLimit, ModeSiteChanged, ModeCaptcha, ModeBadPassword,
+	ModeRateLimit, ModeSiteChanged, ModeCaptcha, ModeBadPassword, ModeRecord,
 }
 
 // Hosts served by the fake site. EvilHost is off every allowlist: the login
@@ -207,6 +218,10 @@ type ExpectFile struct {
 	Mode    string  `yaml:"mode"`
 	Fixture string  `yaml:"fixture"`
 	Content *string `yaml:"content"`
+	// Contains and NotContains check substrings of the file (placeholders
+	// expanded); exclusive with Fixture and Content.
+	Contains    []string `yaml:"contains"`
+	NotContains []string `yaml:"not_contains"`
 }
 
 // Tree checks a whole directory. Entries, when set, is the exact sorted
@@ -374,6 +389,14 @@ func (e Expect) validate(key string) error {
 		}
 		if f.Fixture != "" && f.Content != nil {
 			return fmt.Errorf("%s: fixture and content are exclusive", k)
+		}
+		if (len(f.Contains) > 0 || len(f.NotContains) > 0) && (f.Fixture != "" || f.Content != nil) {
+			return fmt.Errorf("%s: contains/not_contains exclude fixture and content", k)
+		}
+		for j, c := range slices.Concat(f.Contains, f.NotContains) {
+			if c == "" {
+				return fmt.Errorf("%s: contains/not_contains[%d]: empty", k, j)
+			}
 		}
 		if f.Fixture != "" {
 			if err := checkFixture(k+".fixture", f.Fixture); err != nil {

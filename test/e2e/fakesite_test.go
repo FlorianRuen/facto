@@ -443,6 +443,10 @@ func (s *fakeSite) serveWWW(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "/login", http.StatusFound)
 			return
 		}
+		if s.opts.Mode == ModeRecord {
+			s.page(w, recordAccountTmpl, s.recordAccountData())
+			return
+		}
 		s.page(w, accountTmpl, nil)
 	case strings.HasPrefix(r.URL.Path, "/api/") && r.Method == http.MethodGet:
 		s.api(w, r)
@@ -497,10 +501,16 @@ func csrfOK(r *http.Request) bool {
 func (s *fakeSite) loginForm(w http.ResponseWriter, r *http.Request, failed bool) {
 	s.hook(r)
 	tmpl := loginTmpl
-	if s.opts.Mode == ModeSiteChanged {
+	data := map[string]any{"CSRF": newCSRF(w), "Error": failed}
+	switch s.opts.Mode {
+	case ModeSiteChanged:
 		tmpl = changedLoginTmpl
+	case ModeRecord:
+		// The page logs in by itself: facto record never automates a login.
+		tmpl = recordLoginTmpl
+		data["Login"], data["Password"] = s.opts.Login, s.opts.Password
 	}
-	s.page(w, tmpl, map[string]any{"CSRF": newCSRF(w), "Error": failed})
+	s.page(w, tmpl, data)
 }
 
 func (s *fakeSite) loginPost(w http.ResponseWriter, r *http.Request) {
@@ -742,6 +752,21 @@ func (s *fakeSite) list(w http.ResponseWriter, r *http.Request) {
 	}{Invoices: out})
 }
 
+// recordAccountData is the record-mode account page data: the list URL of
+// every seeded invoice, the first PDF URL and a bearer token minted like a
+// session (hunted by the leak checks).
+func (s *fakeSite) recordAccountData() map[string]any {
+	pdf := "/api/invoices/none/pdf"
+	if len(s.opts.Invoices) > 0 {
+		pdf = "/api/invoices/" + s.opts.Invoices[0].ID + "/pdf"
+	}
+	return map[string]any{
+		"List":  "/api/invoices?from=2000-01-01&to=2100-01-01&page=1",
+		"PDF":   pdf,
+		"Token": s.newSession(),
+	}
+}
+
 func writeJSON(w http.ResponseWriter, v any) {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -842,6 +867,46 @@ var (
 </form></body></html>`))
 
 	captchaTmpl = template.Must(template.New("captcha").Parse(pageHead + `<div id="captcha">Prove you are human (never automated)</div></body></html>`))
+
+	// recordLoginTmpl (mode record) fills the accepted credentials and
+	// submits the real login form once every off-allowlist attempt settled.
+	recordLoginTmpl = template.Must(template.New("record-login").Parse(pageHead + `<form id="login-form" hidden method="post" action="/login">
+<input type="hidden" name="csrf_token" value="{{.CSRF}}">
+<label>Login <input id="username" name="username" autocomplete="off"></label>
+<label>Password <input id="password" name="password" type="password"></label>
+<button id="login-submit" type="submit">Sign in</button>
+</form>
+<script>
+(function () {
+  var f = document.getElementById("login-form");
+  var go = function () {
+    if (f.hidden) { setTimeout(go, 20); return; }
+    document.getElementById("username").value = {{.Login}};
+    document.getElementById("password").value = {{.Password}};
+    f.requestSubmit();
+  };
+  go();
+})();
+</script></body></html>`))
+
+	// recordAccountTmpl (mode record) loads the invoice list with a bearer
+	// token, then the first PDF, then shows #done.
+	recordAccountTmpl = template.Must(template.New("record-account").Parse(`<!doctype html><html><head><meta charset="utf-8"><title>Account</title></head><body>
+<div id="account">Synthetic account FP-ACCOUNT-1</div>
+<script>
+(function () {
+  var auth = {headers: {"Authorization": "Bearer " + {{.Token}}}};
+  fetch({{.List}}, auth)
+    .then(function (r) { return r.json(); })
+    .then(function () { return fetch({{.PDF}}, auth); })
+    .then(function (r) { return r.arrayBuffer(); })
+    .finally(function () {
+      var p = document.createElement("p");
+      p.id = "done"; p.textContent = "done";
+      document.body.appendChild(p);
+    });
+})();
+</script></body></html>`))
 
 	accountTmpl = template.Must(template.New("account").Parse(`<!doctype html><html><head><meta charset="utf-8"><title>Account</title></head><body>
 <div id="account">Synthetic account FP-ACCOUNT-1</div></body></html>`))

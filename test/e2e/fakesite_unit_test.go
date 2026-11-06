@@ -798,3 +798,41 @@ func TestWriteSecrets_PrivateTree(t *testing.T) {
 		}
 	}
 }
+
+// TestFakeSite_RecordMode (J2, facto record): the login page fills the
+// accepted credentials itself and submits (no automation in facto), the
+// account page loads the invoice list with a bearer header and one PDF,
+// then shows #done. The pages hold the credentials only in record mode.
+func TestFakeSite_RecordMode(t *testing.T) {
+	t.Parallel()
+	s := unitSite(t, ModeRecord, func(o *siteOptions) {
+		o.Invoices = []siteInvoice{{FakeInvoice: FakeInvoice{ID: "FP-2026-0001", Contract: "C-1", IssuedAt: "2026-03-14"}, PDF: []byte("%PDF-1.7 synthetic")}}
+	})
+	c := s.Client(t)
+	resp, body := get(t, c, "https://"+HostWWW+"/login")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("login status %d", resp.StatusCode)
+	}
+	for _, want := range []string{`id="login-form"`, "requestSubmit", unitPassword, unitLogin} {
+		if !strings.Contains(body, want) {
+			t.Errorf("record login page lacks %q:\n%s", want, body)
+		}
+	}
+	// The real form post still logs in (CSRF enforced as in every mode).
+	resp, _ = submitLogin(t, c, HostWWW, unitPassword)
+	if loc := location(t, resp); !strings.HasSuffix(loc, "/account") {
+		t.Fatalf("record login: Location = %q, want /account", loc)
+	}
+	_, acct := get(t, c, "https://"+HostWWW+"/account")
+	for _, want := range []string{`id="account"`, "/api/invoices", "/api/invoices/FP-2026-0001/pdf", "Bearer", `"done"`} {
+		if !strings.Contains(acct, want) {
+			t.Errorf("record account page lacks %q:\n%s", want, acct)
+		}
+	}
+	// Other modes never put the credentials in a page.
+	other := unitSite(t, ModePassword)
+	_, plain := get(t, other.Client(t), "https://"+HostWWW+"/login")
+	if strings.Contains(plain, unitPassword) || strings.Contains(plain, unitLogin) {
+		t.Fatal("password mode login page holds the credentials")
+	}
+}

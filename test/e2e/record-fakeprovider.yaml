@@ -1,0 +1,62 @@
+name: record-fakeprovider
+description: >
+  J2. facto record drives the hardened browser (pipe, no CDP port,
+  disposable profile removed after the run, in-browser allowlist) on the
+  fake site in record mode: the login page fills the canary credentials and
+  submits itself (facto automates nothing), the account page loads the
+  invoice list with a bearer token minted like a session, then one PDF.
+  The written HAR is 0600, keeps the flow (login POST, redirect, list, PDF,
+  cookie names) and holds no password, login, cookie value, bearer token,
+  CSRF value or PDF byte: every canary and every value the site minted is
+  absent from it, from stdout, stderr and every file under HOME. The
+  off-allowlist evil.test requests of the login page are blocked.
+setup:
+  - path: rec
+    dir: true
+args: [record, "https://www.fakeprovider.test/login", --connector, fakeprovider, --out, "{{home}}/rec/fakeprovider.har", --until, "#done", --timeout, 90s]
+fakesite:
+  mode: record
+  login: fp/login
+  password: fp/password
+  invoices:
+    - { id: FP-2026-0001, contract: C-1, issued_at: 2026-03-14, amount_cents: 8412, currency: EUR, fixture: edf-invoice.pdf }
+secrets:
+  fp/login: "user-{{canary:token}}"
+  fp/password: "{{canary:password}}"
+# FACTO_E2E_INTERACTIVE=1 with an open, empty stdin: no Enter is ever
+# pressed, the recording stops on #done.
+interactive: true
+expect:
+  exit: 0
+  stdout:
+    contains: ["record: wrote", "entries, redacted", "keep it private"]
+  stderr:
+    contains: ["stopping (selector visible)"]
+  files:
+    - path: rec/fakeprovider.har
+      mode: "0600"
+      contains:
+        - '"creator": {'
+        - "https://www.fakeprovider.test/login"
+        - '"method": "POST"'
+        - "password=%5Bredacted%5D"
+        - "username=%5Bredacted%5D"
+        - "/api/invoices?from=2000-01-01"
+        - "/api/invoices/FP-2026-0001/pdf"
+        - '\"id\":\"FP-2026-0001\"'
+        - '"name": "fp_session"'
+        - '"name": "authorization"'
+        # The bearer token the account page inlines is scrubbed (taint).
+        - 'Bearer \" + \"[redacted]\"'
+        - "binary body not recorded"
+        - "ERR_BLOCKED_BY_CLIENT"
+      not_contains:
+        - "%PDF"
+        - "csrf_token=Z"
+  requests:
+    - { method: POST, host: www.fakeprovider.test, path: /login, count: 1 }
+    - { host: www.fakeprovider.test, path: /api/invoices, min: 1 }
+    - { host: evil.test, count: 0 }
+  browser:
+    no_cdp_port: true
+    profile_removed: true

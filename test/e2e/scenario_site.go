@@ -34,6 +34,9 @@ func (s *Scenario) validateFakeSite() error {
 	if len(s.Stdin) > maxStdin {
 		return fmt.Errorf("stdin: more than %d lines", maxStdin)
 	}
+	if s.Interactive && len(s.Stdin) > 0 {
+		return errors.New("interactive and stdin are exclusive")
+	}
 	for i, line := range s.Stdin {
 		if strings.ContainsAny(line, "\r\n\x00") {
 			return fmt.Errorf("stdin[%d]: one line each, no CR, LF or NUL", i)

@@ -140,6 +140,7 @@ type sandbox struct {
 	site     *siteRun          // fake site of the scenario, nil without fakesite
 	extraEnv map[string]string // FACTO_E2E_* variables; "" values are omitted
 	stdin    []string          // lines fed to facto (scenario stdin key)
+	holdIn   bool              // stdin an open, empty pipe (scenario interactive key)
 	pid      atomic.Int64      // facto's pid while a run is in progress
 
 	mu          sync.Mutex
@@ -306,6 +307,14 @@ func (s *sandbox) run(t *testing.T, bin string, args []string) result {
 	var feedErr error
 	feedCtx, factoExited := context.WithCancel(ctx)
 	defer factoExited()
+	if s.holdIn {
+		// Open and empty until facto exits: never a line, never EOF.
+		w, err := cmd.StdinPipe()
+		if err != nil {
+			t.Fatalf("stdin pipe: %v", err)
+		}
+		defer func() { _ = w.Close() }()
+	}
 	if len(s.stdin) > 0 {
 		// Canaries are expanded now; {{totp}} and {{outbox}} when written.
 		lines := make([]string, len(s.stdin))
@@ -365,10 +374,11 @@ func (s *sandbox) run(t *testing.T, bin string, args []string) result {
 func runScenario(t *testing.T, bin string, sc *Scenario) {
 	s := newSandbox(t)
 	s.setup(t, sc)
-	if sc.FakeSite != nil || len(sc.Secrets) > 0 || len(sc.Stdin) > 0 {
+	if sc.FakeSite != nil || len(sc.Secrets) > 0 || len(sc.Stdin) > 0 || sc.Interactive {
 		s.startSite(t, sc)
 	}
 	s.stdin = sc.Stdin
+	s.holdIn = sc.Interactive
 	art := testsecrets.ArtifactDir(t)
 
 	s.resetSite()
@@ -507,6 +517,24 @@ func (s *sandbox) checkFile(t *testing.T, run string, f ExpectFile) {
 		if got := uint32(fi.Mode().Perm()); got != want {
 			t.Errorf("%s: %s mode = %#o, want %#o", run, f.Path, got, want)
 		}
+	}
+	if len(f.Contains) > 0 || len(f.NotContains) > 0 {
+		got, err := readIn(s.home, filepath.FromSlash(f.Path))
+		if err != nil {
+			t.Errorf("%s: read %s: %v", run, f.Path, err)
+			return
+		}
+		for _, c := range f.Contains {
+			if !bytes.Contains(got, []byte(Expand(c, s.home, s.canary(t)))) {
+				t.Errorf("%s: %s does not contain %q", run, f.Path, c)
+			}
+		}
+		for _, c := range f.NotContains {
+			if bytes.Contains(got, []byte(Expand(c, s.home, s.canary(t)))) {
+				t.Errorf("%s: %s contains %q", run, f.Path, c)
+			}
+		}
+		return
 	}
 	var want []byte
 	switch {

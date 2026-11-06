@@ -183,7 +183,7 @@ func newRootCmd(ctx context.Context, e env, stdin io.Reader, stdout, stderr io.W
 	root.SetIn(stdin)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
-	root.AddCommand(newVersionCmd(), newCollectCmd(ctx, e), newLoginCmd(ctx, e), newBrowserCmd(ctx, e))
+	root.AddCommand(newVersionCmd(), newCollectCmd(ctx, e), newLoginCmd(ctx, e), newBrowserCmd(ctx, e), newRecordCmd(ctx, e))
 	return root
 }
 
