@@ -151,7 +151,8 @@ type Page struct {
 	running     int
 	subsChanged chan struct{} // closed and replaced on each change
 	stopped     bool
-	frozen      *frozenSet // the freeze in progress (freeze.go), nil otherwise
+	frozen      *frozenSet      // the freeze in progress (freeze.go), nil otherwise
+	taps        []*Subscription // network taps (tap.go), closed by stop
 
 	blockedMu sync.Mutex
 	blocked   map[string]int

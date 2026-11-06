@@ -162,6 +162,10 @@ func (p *Page) release(session string) {
 func (p *Page) stop() {
 	p.subsMu.Lock()
 	p.stopped = true
+	for _, sub := range p.taps {
+		sub.Close()
+	}
+	p.taps = nil
 	for id, w := range p.sessions {
 		for _, sub := range w.subs {
 			sub.Close()
