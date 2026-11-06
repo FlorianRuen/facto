@@ -1,5 +1,10 @@
 .cache/
 dist/
+# Recordings (facto record) hold personal data: never committed, except
+# sanitized fixtures under a testdata/ directory. Raw recordings never,
+# anywhere (the rule below the exception wins).
+*.har
+!**/testdata/**/*.har
 *.har.raw
 .facto/
 .claude/worktrees/
@@ -11,3 +16,6 @@ dist/
 /internal/lintselftest_pinned/
 /internal/lintselftest_pinnedtest/
 /internal/browser/cft/zz_lintselftest_pinned.go
+# go build outputs at the root
+/facto
+/harslim
