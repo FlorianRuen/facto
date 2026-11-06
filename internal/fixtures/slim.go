@@ -98,6 +98,9 @@ func Slim(f *har.File, opts SlimOptions) (*Slimmed, error) {
 			continue
 		}
 		mime := baseMIME(e.Response.Content.MimeType)
+		if assetMIME(mime) {
+			continue
+		}
 		pdf := mime == "application/pdf"
 		if pdf {
 			if pdfs >= opts.PDFs {
@@ -130,6 +133,24 @@ func Slim(f *har.File, opts SlimOptions) (*Slimmed, error) {
 		out.Flow.Steps = append(out.Flow.Steps, st)
 	}
 	return out, nil
+}
+
+// assetMIME reports a static asset by its response type, whatever the
+// resource type the browser gave it (an SVG sprite or a script chunk
+// fetched by the app is "fetch" or "other"): images, fonts, media,
+// stylesheets and scripts never hold the data a connector parses.
+func assetMIME(mime string) bool {
+	switch {
+	case strings.HasPrefix(mime, "image/"), strings.HasPrefix(mime, "font/"),
+		strings.HasPrefix(mime, "audio/"), strings.HasPrefix(mime, "video/"):
+		return true
+	}
+	switch mime {
+	case "text/css", "text/javascript", "application/javascript", "application/x-javascript",
+		"application/font-woff", "application/font-woff2", "application/vnd.ms-fontobject", "application/wasm":
+		return true
+	}
+	return false
 }
 
 func baseMIME(mt string) string {

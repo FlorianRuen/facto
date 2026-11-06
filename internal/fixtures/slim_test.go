@@ -119,3 +119,32 @@ func keys(m map[string][]byte) []string {
 }
 
 func itoa(i int) string { return strconv.Itoa(i) }
+
+// TestSlim_DropsStaticAssetsByMIMEWhateverTheirResourceType (J2, Wecasa):
+// an SVG sprite, a stylesheet, a font or a script fetched by the app (type
+// "fetch"/"xhr"/"other") is not data a connector needs: dropped by its
+// response type, so no image coordinates reach the fixtures.
+func TestSlim_DropsStaticAssetsByMIMEWhateverTheirResourceType(t *testing.T) {
+	t.Parallel()
+	f := har.New("facto", "test")
+	for _, c := range []struct{ rtype, mime, path string }{
+		{"fetch", "image/svg+xml", "/packs/sprite.svg"},
+		{"other", "image/svg+xml; charset=utf-8", "/packs/icons.svg"},
+		{"xhr", "text/css", "/packs/app.css"},
+		{"fetch", "font/woff2", "/f.woff2"},
+		{"fetch", "application/javascript", "/chunk.js"},
+		{"fetch", "text/javascript", "/chunk2.js"},
+		{"other", "image/png", "/a.png"},
+	} {
+		// Recorded as facto record writes them: binary bodies dropped.
+		f.Log.Entries = append(f.Log.Entries, har.RedactEntry(entry("GET", "https://www.example.test"+c.path, 200, c.rtype, c.mime, "x")))
+	}
+	f.Log.Entries = append(f.Log.Entries, entry("GET", "https://www.example.test/api/v1/user", 200, "fetch", "application/json", `{"id":1}`))
+	out, err := fixtures.Slim(f, fixtures.SlimOptions{Hosts: []string{"www.example.test"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Flow.Steps) != 1 || out.Flow.Steps[0].Path != "/api/v1/user" {
+		t.Fatalf("steps = %+v, want only the API call", out.Flow.Steps)
+	}
+}
