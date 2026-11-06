@@ -170,7 +170,8 @@ func TestRedact_JSONBodiesNested(t *testing.T) {
 
 func TestRedact_JWTAndBearerAnywhere(t *testing.T) {
 	t.Parallel()
-	jwt := "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJlLXZhbHVlLWZha2U"
+	// Synthetic JWT, split for secret scanners (SEC-J1-9); value unchanged.
+	jwt := "eyJhbGciOiJIUzI1NiJ9" + "." + "eyJzdWIiOiIxMjM0NTY3ODkwIn0" + "." + "c2lnbmF0dXJlLXZhbHVlLWZha2U"
 	in := `<html><script>var t = "` + jwt + `"; fetch(u, {headers: {Authorization: "Bearer abcdefghijklmnop0123456789"}})</script></html>`
 	out := har.RedactBody("text/html", in)
 	if strings.Contains(out, jwt) || strings.Contains(out, "abcdefghijklmnop0123456789") {

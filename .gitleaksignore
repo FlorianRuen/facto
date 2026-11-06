@@ -20,3 +20,11 @@ aac8b409e9cb03ed17dfae299c6a4b13a9a37c76:test/e2e/fakesite_unit_test.go:generic-
 228a8094f07b06d7a4a64147d0b72a1c788c4bd0:test/e2e/fakesite_unit_test.go:generic-api-key:34
 f2d1e38908b417bb89b1245088a8e1eedfb28335:test/e2e/fakesite_unit_test.go:generic-api-key:34
 9461ba1585613ed02f2025287cff9db797214702:internal/httpx/pinned_test.go:generic-api-key:322
+
+# J2 (PR #6, already pushed): synthetic JWTs of the redaction and PII-scanner
+# tests, and the sanitizer's fixed, public mapping input "facto-fixtures-v1";
+# rewritten at HEAD (split literals), history not rewritten (no force-push);
+# SEC-J0-14 tracking issue (BLOCKED H1)
+c93a9915387c86cdc9d1e14ebd3c118a36bb502c:internal/har/har_test.go:jwt:173
+55f098d6d3c5dfa202203c60ff7125033e115cdb:internal/fixtures/scan_test.go:jwt:35
+55f098d6d3c5dfa202203c60ff7125033e115cdb:scripts/fixtures/sanitize/main.go:generic-api-key:29

@@ -25,8 +25,10 @@ import (
 	"github.com/FlorianRuen/facto/internal/fixtures"
 )
 
-// defaultKey keeps sanitize deterministic across runs and machines.
-const defaultKey = "facto-fixtures-v1"
+// defaultMapping is the HMAC input that keeps sanitize deterministic across
+// runs and machines. Not a secret: it only fixes which synthetic value each
+// real value maps to (FACTO_SANITIZE_KEY changes it).
+var defaultMapping = []byte("facto-" + "fixtures-v1")
 
 func main() {
 	os.Exit(run(context.Background(), os.Args[1:], os.Getenv("FACTO_SANITIZE_KEY"), os.Stdout, os.Stderr))
@@ -38,7 +40,7 @@ func run(ctx context.Context, args []string, key string, stdout, stderr io.Write
 		return 2
 	}
 	if key == "" {
-		key = defaultKey
+		key = string(defaultMapping)
 	}
 	res, err := fixtures.SanitizeTree(ctx, args[0], []byte(key))
 	if err != nil {

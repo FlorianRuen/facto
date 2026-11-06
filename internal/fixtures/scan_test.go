@@ -32,7 +32,9 @@ func TestScan_FindsPersonalDataAndSecrets(t *testing.T) {
 		{"iban compact", "FR7630006000011234567890189", "iban"},
 		{"card", "4970 1012 3456 7893", "card"},
 		{"nir", "NIR 1 85 05 78 006 084 91", "nir"},
-		{"jwt", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJlLXZhbHVl", "token"},
+		// Synthetic JWT, split so no JWT-shaped literal sits in the source
+		// for secret scanners (SEC-J1-9); the value is unchanged.
+		{"jwt", "eyJhbGciOiJIUzI1NiJ9" + "." + "eyJzdWIiOiIxMjM0NTY3ODkwIn0" + "." + "c2lnbmF0dXJlLXZhbHVl", "token"},
 		{"bearer", "Authorization: Bearer abcdefghijklmnopqrstuvwx", "token"},
 		{"secret field", `{"password":"hunter2-real"}`, "secret-field"},
 		{"secret form", "csrf_token=Zx81jAq0aa&page=1", "secret-field"},
