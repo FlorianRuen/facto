@@ -38,6 +38,12 @@ func (t *Taint) add(v string) {
 	case "true", "false", "null", "undefined":
 		return
 	}
+	if plainWord(v) {
+		// "custom", "french": redacted where they were seen, but cutting
+		// them out of every path would break the fixture
+		// (/api/v1/customer/orders), and they hold no entropy.
+		return
+	}
 	for _, form := range []string{v, url.QueryEscape(v), url.PathEscape(v)} {
 		t.values[form] = struct{}{}
 	}
@@ -242,4 +248,23 @@ func (t *Taint) Scrub(f *File) {
 	for i := range f.Log.Pages {
 		s(&f.Log.Pages[i].Title)
 	}
+}
+
+// plainWordMax is the length from which an all-lowercase word is scrubbed
+// file-wide anyway: an 8-letter random string is a credible password.
+const plainWordMax = 8
+
+// plainWord reports an all-lowercase ASCII word shorter than plainWordMax:
+// a setting value (consent, language), not a secret worth scrubbing from
+// every path and body.
+func plainWord(v string) bool {
+	if len(v) >= plainWordMax {
+		return false
+	}
+	for i := range len(v) {
+		if v[i] < 'a' || v[i] > 'z' {
+			return false
+		}
+	}
+	return true
 }

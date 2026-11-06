@@ -501,6 +501,51 @@ func TestCheck_FindingNamesPlaceNotValue(t *testing.T) {
 	}
 }
 
+// TestTaint_PlainWordsNotScrubbedFileWide (J2, Wecasa): a cookie whose
+// value is an ordinary lowercase word ("custom", a consent choice) is
+// redacted where it is a cookie, but not cut out of every path and body:
+// "/api/v1/customer/orders" stays intact. Values with digits, capitals or
+// symbols, or at least 8 letters, are still scrubbed everywhere.
+func TestTaint_PlainWordsNotScrubbedFileWide(t *testing.T) {
+	t.Parallel()
+	tok := testsecrets.Canary(t, testsecrets.Token)
+	entries := []har.Entry{
+		{Request: har.Request{
+			Method: "GET", URL: "https://a.test/",
+			Headers: []har.NV{{Name: "Cookie", Value: "consent=custom; lang=french; sid=" + tok + "; pin=abcd1234; mixed=AbcDef"}},
+		}},
+		{
+			Request: har.Request{Method: "GET", URL: "https://a.test/api/v1/customer/orders"},
+			Response: har.Response{Content: har.Content{
+				MimeType: "application/json",
+				Text:     `{"path":"/api/v1/customer/orders","echo":"` + tok + `","lang":"french","p":"abcd1234","m":"AbcDef"}`,
+			}},
+		},
+	}
+	f := har.New("t", "dev")
+	taint := har.NewTaint()
+	for _, e := range entries {
+		taint.Collect(e)
+		f.Log.Entries = append(f.Log.Entries, har.RedactEntry(e))
+	}
+	taint.Scrub(f)
+	e := f.Log.Entries[1]
+	if e.Request.URL != "https://a.test/api/v1/customer/orders" || !strings.Contains(e.Response.Content.Text, "/api/v1/customer/orders") {
+		t.Fatalf("plain word scrubbed out of a path: %s %s", e.Request.URL, e.Response.Content.Text)
+	}
+	if !strings.Contains(e.Response.Content.Text, `"lang":"french"`) {
+		t.Errorf("plain lowercase word scrubbed: %s", e.Response.Content.Text)
+	}
+	for _, s := range []string{tok, "abcd1234", "AbcDef"} {
+		if strings.Contains(e.Response.Content.Text, s) {
+			t.Errorf("token-like cookie value %q not scrubbed elsewhere: %s", s, e.Response.Content.Text)
+		}
+	}
+	if c := f.Log.Entries[0].Request.Headers[0].Value; c != har.Redacted {
+		t.Errorf("cookie header not redacted: %q", c)
+	}
+}
+
 // TestStabilize_FixedPointAndOnlyRemoves (J2): Stabilize redacts until a
 // second redaction changes nothing, so Check is clean, and it never brings
 // a value back: every round only removes.
