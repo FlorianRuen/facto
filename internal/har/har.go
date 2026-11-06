@@ -529,6 +529,12 @@ var (
 	// An <input> tag; its type, name and value are read by redactInputs.
 	inputRE = regexp.MustCompile(`(?is)<input\b[^>]*>`)
 	attrRE  = regexp.MustCompile(`(?is)\b(type|name|id|value)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)`)
+	// inlineKVRE is a key and a quoted string value in a script or inline
+	// JSON: token: "…", "access_token":"…", csrfToken = '…'.
+	inlineKVRE = regexp.MustCompile(`(["']?)([A-Za-z_$][A-Za-z0-9_$.-]{1,63})(["']?)(\s*[:=]\s*)("[^"\\\n]{6,}"|'[^'\\\n]{6,}')`)
+	// metaRE is a <meta> tag; its name and content are read by redactMeta.
+	metaRE     = regexp.MustCompile(`(?is)<meta\b[^>]*>`)
+	metaAttrRE = regexp.MustCompile(`(?is)\b(name|content)\s*=\s*("[^"]*"|'[^']*')`)
 )
 
 // redactText removes JWTs, bearer/basic credentials and secret <input>
@@ -539,10 +545,42 @@ func redactText(s string) string {
 	}
 	s = jwtRE.ReplaceAllString(s, Redacted)
 	s = bearerRE.ReplaceAllString(s, "$1 "+Redacted)
-	if strings.Contains(strings.ToLower(s), "<input") {
+	low := strings.ToLower(s)
+	if strings.Contains(low, "<input") {
 		s = inputRE.ReplaceAllStringFunc(s, redactInput)
 	}
-	return s
+	if strings.Contains(low, "<meta") {
+		s = metaRE.ReplaceAllStringFunc(s, redactMeta)
+	}
+	return inlineKVRE.ReplaceAllStringFunc(s, func(m string) string {
+		p := inlineKVRE.FindStringSubmatch(m)
+		if !SecretField(p[2]) || p[1] != p[3] {
+			return m
+		}
+		q := p[5][:1]
+		return p[1] + p[2] + p[3] + p[4] + q + Redacted + q
+	})
+}
+
+// redactMeta empties the content of a <meta> whose name is a secret field
+// (csrf-token, _csrf…).
+func redactMeta(tag string) string {
+	secretMeta := false
+	for _, m := range metaAttrRE.FindAllStringSubmatch(tag, -1) {
+		if strings.EqualFold(m[1], "name") && SecretField(strings.Trim(m[2], `"'`)) {
+			secretMeta = true
+		}
+	}
+	if !secretMeta {
+		return tag
+	}
+	return metaAttrRE.ReplaceAllStringFunc(tag, func(a string) string {
+		m := metaAttrRE.FindStringSubmatch(a)
+		if !strings.EqualFold(m[1], "content") {
+			return a
+		}
+		return m[1] + `="` + Redacted + `"`
+	})
 }
 
 // redactInput empties the value of a password input or of an input whose

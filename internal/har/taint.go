@@ -93,6 +93,35 @@ func (t *Taint) Collect(e Entry) {
 		t.collectBody(pd.MimeType, pd.Text, requestField)
 	}
 	t.collectBody(e.Response.Content.MimeType, e.Response.Content.Text, SecretField)
+	t.collectInline(e.Response.Content.Text)
+}
+
+// collectInline taints the values redactText removes from free text:
+// secret keys of inline scripts and secret <meta> contents.
+func (t *Taint) collectInline(text string) {
+	if text == "" {
+		return
+	}
+	for _, p := range inlineKVRE.FindAllStringSubmatch(text, -1) {
+		if SecretField(p[2]) && p[1] == p[3] {
+			t.add(p[5][1 : len(p[5])-1])
+		}
+	}
+	for _, tag := range metaRE.FindAllString(text, -1) {
+		secretMeta, content := false, ""
+		for _, m := range metaAttrRE.FindAllStringSubmatch(tag, -1) {
+			v := strings.Trim(m[2], `"'`)
+			switch strings.ToLower(m[1]) {
+			case "name":
+				secretMeta = secretMeta || SecretField(v)
+			case "content":
+				content = v
+			}
+		}
+		if secretMeta {
+			t.add(content)
+		}
+	}
 }
 
 // addCredential taints the credential of "Bearer <x>" / "Basic <x>" values.

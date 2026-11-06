@@ -382,3 +382,57 @@ func TestCheck_CleanMinimalEntryPasses(t *testing.T) {
 		t.Fatalf("Check = %q, want none", got)
 	}
 }
+
+// TestRedact_InlineScriptSecretKeys (J2): a page that inlines a token in a
+// script object ({token: "…"}, "access_token": "…", csrfToken = '…') has it
+// removed even when no request ever carried it in a header.
+func TestRedact_InlineScriptSecretKeys(t *testing.T) {
+	t.Parallel()
+	tok := testsecrets.Canary(t, testsecrets.Token)
+	for _, in := range []string{
+		`<script>window.__FP = {token: "` + tok + `", list: "/api"};</script>`,
+		`<script>var cfg = {"access_token":"` + tok + `"}</script>`,
+		`<script>window.csrfToken = '` + tok + `';</script>`,
+		`<meta name="csrf-token" content="` + tok + `">`,
+	} {
+		out := har.RedactBody("text/html", in)
+		if strings.Contains(out, tok) {
+			t.Errorf("inline secret kept: %s", out)
+		}
+	}
+	keep := `<script>var cfg = {list: "/api/invoices", page: "1"};</script>`
+	if got := har.RedactBody("text/html", keep); got != keep {
+		t.Errorf("harmless inline config changed: %s", got)
+	}
+}
+
+// TestTaint_InlineSecretScrubbedElsewhere: a token first seen inline on a
+// page is scrubbed from the other entries too.
+func TestTaint_InlineSecretScrubbedElsewhere(t *testing.T) {
+	t.Parallel()
+	tok := testsecrets.Canary(t, testsecrets.Token)
+	entries := []har.Entry{
+		{
+			Request:  har.Request{Method: "GET", URL: "https://a.test/"},
+			Response: har.Response{Content: har.Content{MimeType: "text/html", Text: `<script>x = {token: "` + tok + `"}</script>`}},
+		},
+		{
+			Request:  har.Request{Method: "GET", URL: "https://a.test/api?echo=x"},
+			Response: har.Response{Content: har.Content{MimeType: "text/plain", Text: "seen " + tok}},
+		},
+	}
+	f := har.New("t", "dev")
+	taint := har.NewTaint()
+	for _, e := range entries {
+		taint.Collect(e)
+		f.Log.Entries = append(f.Log.Entries, har.RedactEntry(e))
+	}
+	taint.Scrub(f)
+	var b bytes.Buffer
+	if err := har.Encode(&b, f); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(b.Bytes(), []byte(tok)) {
+		t.Fatalf("inline token survived elsewhere:\n%s", b.Bytes())
+	}
+}
