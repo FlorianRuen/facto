@@ -27,6 +27,8 @@ import (
 const (
 	DefaultMaxEntries = 5000
 	bodyTimeout       = 10 * time.Second
+	// stabilizeRounds bounds the extra redaction rounds of Run.
+	stabilizeRounds = 3
 )
 
 // Source is what the recorder reads: *browser.NetworkTap satisfies it.
@@ -113,6 +115,10 @@ loop:
 	// login page that inlines the password, an SPA that inlines its token).
 	r.taint.Scrub(r.file)
 	r.taint = har.NewTaint()
+	// Redact again until a further redaction changes nothing: facto record
+	// refuses to write a file har.Check flags (fail closed), and real pages
+	// can need more than one round (J2, Wecasa).
+	har.Stabilize(r.file, stabilizeRounds)
 	return r.file
 }
 

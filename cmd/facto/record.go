@@ -166,8 +166,12 @@ func recordRun(ctx context.Context, e env, f recordFlags, rawURL string, stdin i
 		return &exitError{code: orchestrator.ExitAttention, err: fmt.Errorf("record: %w", err)}
 	}
 	if findings := har.Check(file); len(findings) > 0 {
-		// Never reached: every entry went through RedactEntry. Fail closed.
-		return &exitError{code: orchestrator.ExitAttention, err: errors.New("record: redaction check failed, nothing written")}
+		// Fail closed: a second redaction would still change these entries.
+		// Findings name places (entry, host, header name), never a value.
+		for _, f := range findings {
+			_, _ = io.WriteString(stderr, "record: "+f+"\n")
+		}
+		return &exitError{code: orchestrator.ExitAttention, err: errors.New("record: redaction check failed, nothing written (please report the lines above)")}
 	}
 	if err := writeRecording(ctx, out, file); err != nil {
 		return &exitError{code: orchestrator.ExitAttention, err: fmt.Errorf("record: write: %w", err)}

@@ -618,10 +618,91 @@ func Check(f *File) []string {
 		a, _ := json.Marshal(e)
 		b, _ := json.Marshal(r)
 		if !bytes.Equal(a, b) {
-			out = append(out, fmt.Sprintf("entry %d (%s %s): unredacted secret", i, e.Request.Method, hostOf(e.Request.URL)))
+			out = append(out, fmt.Sprintf("entry %d (%s %s): unredacted secret in %s",
+				i, e.Request.Method, hostOf(e.Request.URL), strings.Join(diffPlaces(e, r), ", ")))
 		}
 	}
 	return out
+}
+
+// Stabilize redacts every entry of f again until a further redaction
+// changes nothing (Check is then clean), at most rounds times. It reports
+// whether that fixed point was reached. Each round only removes values
+// (RedactEntry never adds one), so it is always safe to apply: it absorbs
+// shapes a first round creates (a scrubbed value inside a URL, a redaction
+// that exposes a new key/value match).
+func Stabilize(f *File, rounds int) bool {
+	for range rounds {
+		changed := false
+		for i, e := range f.Log.Entries {
+			r := RedactEntry(e)
+			a, _ := json.Marshal(e)
+			b, _ := json.Marshal(r)
+			if !bytes.Equal(a, b) {
+				f.Log.Entries[i] = r
+				changed = true
+			}
+		}
+		if !changed {
+			return true
+		}
+	}
+	return len(Check(f)) == 0
+}
+
+// diffPlaces names the parts of e that redaction changes (header names,
+// never values).
+func diffPlaces(e, r Entry) []string {
+	var out []string
+	if e.Request.URL != r.Request.URL {
+		out = append(out, "request url")
+	}
+	nv := func(where string, a, b []NV) {
+		for i := range a {
+			if i < len(b) && a[i].Value != b[i].Value {
+				out = append(out, where+" "+safeName(a[i].Name))
+			}
+		}
+	}
+	nv("request header", e.Request.Headers, r.Request.Headers)
+	nv("query", e.Request.QueryString, r.Request.QueryString)
+	nv("response header", e.Response.Headers, r.Response.Headers)
+	if len(e.Request.Cookies) > 0 && !slices.Equal(e.Request.Cookies, r.Request.Cookies) {
+		out = append(out, "request cookies")
+	}
+	if len(e.Response.Cookies) > 0 && !slices.Equal(e.Response.Cookies, r.Response.Cookies) {
+		out = append(out, "response cookies")
+	}
+	if e.Request.PostData != nil && r.Request.PostData != nil {
+		if e.Request.PostData.Text != r.Request.PostData.Text {
+			out = append(out, "request body ("+safeName(e.Request.PostData.MimeType)+")")
+		}
+		nv("form param", e.Request.PostData.Params, r.Request.PostData.Params)
+	}
+	if e.Response.RedirectURL != r.Response.RedirectURL {
+		out = append(out, "redirect url")
+	}
+	if e.Response.Content != r.Response.Content {
+		out = append(out, "response body ("+safeName(e.Response.Content.MimeType)+")")
+	}
+	if len(out) == 0 {
+		out = append(out, "entry")
+	}
+	return out
+}
+
+// safeName keeps a header name or MIME type printable and short.
+func safeName(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r > 0x20 && r < 0x7f && r != '"' {
+			b.WriteRune(r)
+		}
+		if b.Len() >= 48 {
+			break
+		}
+	}
+	return b.String()
 }
 
 func hostOf(raw string) string {

@@ -437,3 +437,97 @@ func TestTaint_InlineSecretScrubbedElsewhere(t *testing.T) {
 		t.Fatalf("inline token survived elsewhere:\n%s", b.Bytes())
 	}
 }
+
+// TestScrub_ThenCheckClean (J2, Wecasa "redaction check failed"): a file
+// whose tainted values were scrubbed out of URLs, headers and bodies passes
+// har.Check: the scrub leaves nothing a second redaction would change.
+func TestScrub_ThenCheckClean(t *testing.T) {
+	t.Parallel()
+	tok := testsecrets.Canary(t, testsecrets.Token)
+	sess := testsecrets.Canary(t, testsecrets.Session)
+	entries := []har.Entry{
+		{Request: har.Request{
+			Method: "GET", URL: "https://a.test/api",
+			Headers: []har.NV{{Name: "Authorization", Value: "Bearer " + tok}, {Name: "Cookie", Value: "sid=" + sess}},
+		}},
+		{
+			Request: har.Request{
+				Method: "GET", URL: "https://a.test/sessions/" + tok + "/invoice?ref=" + sess + "&page=1",
+				Headers:     []har.NV{{Name: "Referer", Value: "https://a.test/x?ref=" + sess}, {Name: ":path", Value: "/sessions/" + tok + "/invoice?ref=" + sess}},
+				QueryString: []har.NV{{Name: "ref", Value: sess}, {Name: "page", Value: "1"}},
+			},
+			Response: har.Response{
+				RedirectURL: "/next?ref=" + sess,
+				Headers:     []har.NV{{Name: "Location", Value: "/next?ref=" + sess}},
+				Content:     har.Content{MimeType: "application/json", Text: `{"ref":"` + sess + `","url":"/sessions/` + tok + `"}`},
+			},
+		},
+	}
+	f := har.New("t", "dev")
+	taint := har.NewTaint()
+	for _, e := range entries {
+		taint.Collect(e)
+		f.Log.Entries = append(f.Log.Entries, har.RedactEntry(e))
+	}
+	taint.Scrub(f)
+	if got := har.Check(f); len(got) != 0 {
+		for i, e := range f.Log.Entries {
+			a, _ := json.Marshal(e)
+			b, _ := json.Marshal(har.RedactEntry(e))
+			if !bytes.Equal(a, b) {
+				t.Errorf("entry %d changes on a second redaction:\n%s\n%s", i, a, b)
+			}
+		}
+		t.Fatalf("Check after scrub = %q", got)
+	}
+}
+
+// TestCheck_FindingNamesPlaceNotValue: a finding says which part of which
+// entry is unredacted, never the value.
+func TestCheck_FindingNamesPlaceNotValue(t *testing.T) {
+	t.Parallel()
+	tok := testsecrets.Canary(t, testsecrets.Token)
+	f := har.New("t", "dev")
+	f.Log.Entries = []har.Entry{{Request: har.Request{
+		Method: "GET", URL: "https://a.test/?access_token=" + tok,
+		Headers: []har.NV{{Name: "X-Auth-Token", Value: tok}},
+	}}}
+	got := har.Check(f)
+	if len(got) != 1 || !strings.Contains(got[0], "request url") || !strings.Contains(got[0], "request header X-Auth-Token") {
+		t.Fatalf("Check = %q", got)
+	}
+	if strings.Contains(got[0], tok) {
+		t.Fatalf("finding quotes the value: %q", got[0])
+	}
+}
+
+// TestStabilize_FixedPointAndOnlyRemoves (J2): Stabilize redacts until a
+// second redaction changes nothing, so Check is clean, and it never brings
+// a value back: every round only removes.
+func TestStabilize_FixedPointAndOnlyRemoves(t *testing.T) {
+	t.Parallel()
+	tok := testsecrets.Canary(t, testsecrets.Token)
+	f := har.New("t", "dev")
+	// A scrubbed value left as a raw "[redacted]" in a query: RedactURL
+	// re-encodes it on the next round; the header was never redacted.
+	f.Log.Entries = []har.Entry{{Request: har.Request{
+		Method: "GET", URL: "https://a.test/x?ref=[redacted]&page=1",
+		Headers: []har.NV{{Name: "X-Session", Value: tok}},
+	}}}
+	if !har.Stabilize(f, 3) {
+		t.Fatal("Stabilize did not reach a fixed point in 3 rounds")
+	}
+	if got := har.Check(f); len(got) != 0 {
+		t.Fatalf("Check after Stabilize = %q", got)
+	}
+	var b bytes.Buffer
+	if err := har.Encode(&b, f); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(b.Bytes(), []byte(tok)) {
+		t.Fatal("secret header survived Stabilize")
+	}
+	if !strings.Contains(f.Log.Entries[0].Request.URL, "page=1") {
+		t.Fatalf("harmless query lost: %s", f.Log.Entries[0].Request.URL)
+	}
+}
