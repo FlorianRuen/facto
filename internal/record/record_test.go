@@ -280,3 +280,41 @@ func TestRecorder_StopsOnContextEnd(t *testing.T) {
 		t.Fatalf("Run after cancel = %+v", out)
 	}
 }
+
+// TestRecorder_CapsTotalBodyBytes (SEC-J2-5): text bodies are kept until
+// MaxBodyTotal bytes in all; later ones are not fetched into the file and
+// say so. Entries are still recorded.
+func TestRecorder_CapsTotalBodyBytes(t *testing.T) {
+	t.Parallel()
+	f := newFakeTap()
+	for i := range 3 {
+		id := itoa(i)
+		f.emit(t, "Network.requestWillBeSent", map[string]any{
+			"requestId": id, "request": map[string]any{"url": "https://a.test/" + id, "method": "GET", "headers": map[string]any{}},
+		})
+		f.emit(t, "Network.responseReceived", map[string]any{
+			"requestId": id, "response": map[string]any{"status": 200, "mimeType": "text/plain", "headers": map[string]any{}},
+		})
+		f.setBody(id, strings.Repeat("x", 40), false)
+		f.emit(t, "Network.loadingFinished", map[string]any{"requestId": id, "encodedDataLength": 40})
+	}
+	close(f.ch)
+	rec := record.New(record.Options{Clock: clock.NewFake(time.Unix(0, 0)), MaxBodyTotal: 100})
+	out := rec.Run(t.Context(), f)
+	if len(out.Log.Entries) != 3 {
+		t.Fatalf("entries = %d, want 3", len(out.Log.Entries))
+	}
+	kept := 0
+	for _, e := range out.Log.Entries {
+		if e.Response.Content.Text != "" {
+			kept++
+			continue
+		}
+		if !strings.Contains(e.Response.Content.Comment, "size cap") {
+			t.Errorf("dropped body comment = %q, want a size cap note", e.Response.Content.Comment)
+		}
+	}
+	if kept != 2 {
+		t.Fatalf("bodies kept = %d, want 2 under a 100-byte cap", kept)
+	}
+}

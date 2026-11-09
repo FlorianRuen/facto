@@ -26,7 +26,11 @@ import (
 // Defaults of Options.
 const (
 	DefaultMaxEntries = 5000
-	bodyTimeout       = 10 * time.Second
+	// DefaultMaxBodyTotal bounds the text bodies one recording keeps in
+	// memory (SEC-J2-5): each is cut at har.MaxBodyBytes, and 5000 of
+	// them could otherwise reach 10 GiB.
+	DefaultMaxBodyTotal = 256 << 20
+	bodyTimeout         = 10 * time.Second
 	// stabilizeRounds bounds the extra redaction rounds of Run.
 	stabilizeRounds = 3
 )
@@ -46,6 +50,10 @@ type Options struct {
 	Creator    string // HAR creator name; "facto" when empty
 	Version    string // HAR creator version
 	MaxEntries int    // DefaultMaxEntries when <= 0
+	// MaxBodyTotal bounds the bytes of text bodies kept, in all;
+	// DefaultMaxBodyTotal when <= 0. Later bodies are not kept (a comment
+	// says so); their entries still are.
+	MaxBodyTotal int
 }
 
 // Recorder builds one HAR file. It is used by one goroutine (Run).
@@ -56,6 +64,8 @@ type Recorder struct {
 	file    *har.File
 	dropped int
 	taint   *har.Taint // secret values seen; in memory only
+	// bodyBytes counts the text body bytes kept (MaxBodyTotal).
+	bodyBytes int
 }
 
 // pendingEntry is a request not finished yet. Its headers may hold secrets
@@ -78,6 +88,9 @@ func New(opts Options) *Recorder {
 	}
 	if opts.MaxEntries <= 0 {
 		opts.MaxEntries = DefaultMaxEntries
+	}
+	if opts.MaxBodyTotal <= 0 {
+		opts.MaxBodyTotal = DefaultMaxBodyTotal
 	}
 	return &Recorder{opts: opts, pending: map[string]*pendingEntry{}, file: har.New(opts.Creator, opts.Version), taint: har.NewTaint()}
 }
@@ -305,7 +318,13 @@ func (r *Recorder) readBody(ctx context.Context, src Source, id string, p *pendi
 		body = string(raw)
 	}
 	c.Size = len(body)
-	c.Text = body
+	kept := min(len(body), har.MaxBodyBytes)
+	if r.bodyBytes+kept > r.opts.MaxBodyTotal {
+		c.Comment = "body not recorded: recording size cap reached"
+		return
+	}
+	r.bodyBytes += kept
+	c.Text = body // har.RedactContent cuts it at MaxBodyBytes, with a comment
 }
 
 // finish merges the extra-info headers, builds the cookie lists, redacts
