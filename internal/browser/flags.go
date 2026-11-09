@@ -18,6 +18,7 @@ type Options struct {
 	GOOS           string   // target OS for the flags; "" means runtime.GOOS
 	ProfileDir     string   // disposable profile (A12), absolute and clean; required
 	AllowedDomains []string // connector Info().AllowedDomains (A11)
+	Static         []string // connector Info().BrowserStatic (static.go): hosts resolvable, paths never in flags
 	Visible        bool     // headful window; otherwise --headless=new
 	AllowProxy     bool     // true only when FACTO_ALLOW_PROXY is exactly "1"
 
@@ -91,6 +92,11 @@ func Flags(opts Options) ([]string, error) {
 	}
 	domains, err := normalizeDomains(opts.AllowedDomains)
 	if err != nil {
+		return nil, err
+	}
+	// Static hosts are validated but never resolvable (SEC-J2-1): facto
+	// downloads their allowed paths itself (static.go).
+	if _, err := ParseStatic(opts.Static); err != nil {
 		return nil, err
 	}
 	args := slices.Clone(baseFlags)

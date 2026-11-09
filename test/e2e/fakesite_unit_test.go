@@ -798,3 +798,56 @@ func TestWriteSecrets_PrivateTree(t *testing.T) {
 		}
 	}
 }
+
+// TestFakeSite_RecordMode (J2, facto record): the login page fills the
+// accepted credentials itself and submits (no automation in facto), the
+// account page loads the invoice list with a bearer header and one PDF,
+// then shows #done. The pages hold the credentials only in record mode.
+func TestFakeSite_RecordMode(t *testing.T) {
+	t.Parallel()
+	s := unitSite(t, ModeRecord, func(o *siteOptions) {
+		o.Invoices = []siteInvoice{{FakeInvoice: FakeInvoice{ID: "FP-2026-0001", Contract: "C-1", IssuedAt: "2026-03-14"}, PDF: []byte("%PDF-1.7 synthetic")}}
+	})
+	c := s.Client(t)
+	resp, body := get(t, c, "https://"+HostWWW+"/login")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("login status %d", resp.StatusCode)
+	}
+	for _, want := range []string{`id="login-form"`, "requestSubmit", unitPassword, unitLogin} {
+		if !strings.Contains(body, want) {
+			t.Errorf("record login page lacks %q:\n%s", want, body)
+		}
+	}
+	// The real form post still logs in (CSRF enforced as in every mode).
+	resp, _ = submitLogin(t, c, HostWWW, unitPassword)
+	if loc := location(t, resp); !strings.HasSuffix(loc, "/account") {
+		t.Fatalf("record login: Location = %q, want /account", loc)
+	}
+	_, acct := get(t, c, "https://"+HostWWW+"/account")
+	// The list is built by the app bundle on the static host (J2: a
+	// supplier app on shared storage), and the page also tries another
+	// path of that host, which the static allowlist must block.
+	for _, want := range []string{`id="account"`, "https://" + HostStatic + StaticAppPath + "list.js", "https://" + HostStatic + "/other-bucket/evil.js", "/api/invoices", "/api/invoices/FP-2026-0001/pdf"} {
+		if !strings.Contains(acct, want) {
+			t.Errorf("record account page lacks %q:\n%s", want, acct)
+		}
+	}
+	resp, js := get(t, c, "https://"+HostStatic+StaticAppPath+"list.js")
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "text/javascript; charset=utf-8" {
+		t.Fatalf("static bundle: %d %q", resp.StatusCode, resp.Header.Get("Content-Type"))
+	}
+	for _, want := range []string{"window.__FP", "Bearer", `"done"`} {
+		if !strings.Contains(js, want) {
+			t.Errorf("static bundle lacks %q:\n%s", want, js)
+		}
+	}
+	if resp, _ := get(t, c, "https://"+HostStatic+"/other-bucket/evil.js"); resp.StatusCode != http.StatusOK {
+		t.Errorf("off-prefix static file must exist (so only the browser can block it): %d", resp.StatusCode)
+	}
+	// Other modes never put the credentials in a page.
+	other := unitSite(t, ModePassword)
+	_, plain := get(t, other.Client(t), "https://"+HostWWW+"/login")
+	if strings.Contains(plain, unitPassword) || strings.Contains(plain, unitLogin) {
+		t.Fatal("password mode login page holds the credentials")
+	}
+}

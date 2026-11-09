@@ -34,6 +34,7 @@ expect:
   files:
     - { path: Invoices/2026/a.pdf, mode: "0600", fixture: edf-invoice.pdf }
     - { path: notes.txt, content: "x\n" }
+    - { path: rec.har, mode: "0600", contains: ["/api/invoices"], not_contains: ["password=x"] }
   absent: [Invoices/inbox/a.pdf]
   trees:
     - { path: Invoices, private: true, entries: [inbox/, inbox/sub/] }
@@ -100,7 +101,8 @@ func TestScenarioParse(t *testing.T) {
 			if s.Expect.Exit == nil || *s.Expect.Exit != 0 || s.Expect.Stdout.Prefix != "facto " || !s.Expect.Stderr.Empty {
 				t.Errorf("expect = %+v", s.Expect)
 			}
-			if len(s.Expect.Files) != 2 || s.Expect.Files[0].Mode != "0600" || s.Expect.Files[1].Content == nil {
+			if len(s.Expect.Files) != 3 || s.Expect.Files[0].Mode != "0600" || s.Expect.Files[1].Content == nil ||
+				!slices.Equal(s.Expect.Files[2].Contains, []string{"/api/invoices"}) || !slices.Equal(s.Expect.Files[2].NotContains, []string{"password=x"}) {
 				t.Errorf("expect.files = %+v", s.Expect.Files)
 			}
 			if len(s.Expect.Trees) != 1 || !s.Expect.Trees[0].Private || len(s.Expect.Trees[0].Entries) != 2 {
@@ -123,6 +125,10 @@ func TestScenarioParse(t *testing.T) {
 
 		// Format errors.
 		{name: "unknown top-level key", in: validScenario + "timeout: 5s\n", wantErr: true},
+		{name: "interactive with stdin", in: validSiteScenario + "interactive: true\n", wantErr: true},
+		{name: "file contains with content", in: mutate(`content: "x\n" }`, `content: "x\n", contains: [x] }`), wantErr: true},
+		{name: "file contains with fixture", in: mutate("fixture: edf-invoice.pdf }\n    - { path: notes", "fixture: edf-invoice.pdf, contains: [x] }\n    - { path: notes"), wantErr: true},
+		{name: "file empty contains entry", in: mutate(`contains: ["/api/invoices"]`, `contains: [""]`), wantErr: true},
 		{name: "unknown nested key", in: mutate("    fixture: edf-invoice.pdf\n", "    fixture: edf-invoice.pdf\n    owner: root\n"), wantErr: true},
 		{name: "second document", in: validScenario + "---\nname: other\n", wantErr: true},
 		{name: "missing exit", in: mutate("  exit: 0\n  stdout", "  stdout"), wantErr: true},

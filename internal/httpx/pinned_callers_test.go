@@ -25,7 +25,7 @@ const httpxImportPath = "github.com/FlorianRuen/facto/internal/httpx"
 
 // pinnedAllowed are the module-relative slash directories whose production
 // files may call httpx.NewPinned.
-var pinnedAllowed = []string{"internal/browser/cft/", "internal/httpx/"}
+var pinnedAllowed = []string{"internal/browser/cft/", "internal/browser/staticfetch/", "internal/httpx/"}
 
 // pinnedCallAllowed reports whether the module-relative file rel may call
 // NewPinned.

@@ -238,8 +238,9 @@ the pipe (the io-pipes route below bypasses this):
   (no case change, trailing dot, subdomain or IDN form), port 443, no userinfo, and a
   canonical path (no dot or empty segment, no percent-encoding, no backslash) under the
   prefix. `ParseAllowlist` and connector allowlists are unchanged. Only
-  `internal/browser/cft` may call `NewPinned`: a forbidigo rule, backed by
-  `internal/httpx/pinned_callers_test.go` and proven live by `make lint-selftest`.
+  `internal/browser/cft` and (J2, static allowlist) `internal/browser/staticfetch` may call
+  `NewPinned`: a forbidigo rule, backed by `internal/httpx/pinned_callers_test.go` and
+  proven live by `make lint-selftest`.
 - **Layout.** `facto browser install` unpacks into `<state_dir>/chrome/<version>/`
   (`--dir` to override; `make chrome` uses `.cache/chrome`, gitignored), every directory
   0700, executables 0700, other files 0600, no setuid bit (so the bundled `chrome_sandbox`
@@ -341,6 +342,48 @@ the pipe (the io-pipes route below bypasses this):
     out) resolves to `~NOTFOUND`, so `make e2e` never looks a real supplier up nor reaches
     it; `CheckFlagsE2E` refuses an e2e argv with an `EXCLUDE` rule. Proof:
     `TestAttack_E2EWildcardAllowlistNeverReachesRealDNS`, `TestFlagsE2E_NoNameReachesRealDNS`.
+- **Path-scoped static allowlist (J2, A11 "per-connector CDN").** Some suppliers serve
+  their single-page app bundle from shared storage (Wecasa: `storage.googleapis.com/<bucket>/`),
+  which `httpx.ParseAllowlist` refuses as a whole host because anyone can publish there.
+  Without it the app never starts and the login or invoice page stays empty. A connector
+  declares `Info().BrowserStatic` entries `https://<host>/<prefix>/` (`facto record`:
+  `--allow-static`), parsed by `browser.ParseStatic`: https only, exact host (no wildcard,
+  IP literal, loopback name or port), a non-empty path of `[A-Za-z0-9._~-]` segments ending
+  in `/`, no dot segment, escape, query, fragment or userinfo.
+  **Chrome never reaches a static host (SEC-J2-1).** A first version made the host
+  resolvable (`EXCLUDE` in `--host-resolver-rules`) and enforced the prefix in `Fetch`;
+  but `Fetch` never sees WebSockets, so a page could open `wss://<host>/<any path>?<data>`
+  to any bucket of the shared host (audit 2026-11-06, reproduced in Chrome 156). Now the
+  static host stays `~NOTFOUND` like every other name. `Fetch` pauses a request before
+  name resolution; one that is a GET or HEAD subresource (never a `Document` or
+  `WebSocket`) whose path is under the prefix, with no `.`/`..` or empty segment and no
+  percent-encoding (the pinned client's own path rule), is downloaded on facto's side
+  through the entry's
+  `httpx.NewPinned(host, prefix)` client (`internal/browser/staticfetch`: exact host, port
+  443, canonical path under the prefix on every redirect hop, before dialing) and handed
+  back with `Fetch.fulfillRequest`. Only `Accept`, `Origin`, `Range`, `If-None-Match` and
+  `If-Modified-Since` are forwarded (no credential header, no custom header),
+  and only content, cache, range and CORS response headers come back (never
+  `Set-Cookie`). A download is bounded (60 s, `browser.MaxStaticBody` 8 MiB so its base64
+  fits one CDP message, 6 at once per page, off the session's event queue); any failure
+  fails the request, never continues it; past 128 pending static requests per page,
+  more are failed at once; one slot covers the download and the hand-over, so at most 6
+  bodies are held at once. The pinned clients have no cookie jar (`httpx.Options.NoCookies`):
+  a `Set-Cookie` of the static host is never sent back. A WebSocket or any other request Chrome makes
+  itself to the host fails at name resolution. `Navigate`, `TypeSecret`'s origin check
+  and `Cookies` keep the domain allowlist only; connector HTTP clients never see static
+  entries. A launch with static entries and no `PoolConfig.StaticClients` is refused. The
+  orchestrator launches login browsers with the connector's `Info().BrowserStatic`,
+  whatever the connector passes. Tests: `static_test.go` (parser, fulfilled-not-continued,
+  header filters, prefix/escape/method/redirect/document refusals, download failures,
+  host never in the resolver rules), `TestAttack_ChromeStaticHostWebSocketBlocked`
+  (real Chrome: WebSockets from the page and a worker, on and off the prefix, never reach
+  the host; off-prefix fetch blocked; controls: a `crossorigin` module script and a fetch
+  under the prefix load; fails on the first version), `TestRun_BrowserStaticIsConnectorInfo`,
+  and the e2e scenarios `record-fakeprovider` (bundle loads, another bucket of the same host
+  never requested) and `record-static-missing` (without the entry the page stays empty).
+  Residual risk: the bucket owner controls code that runs in the login page; the same is
+  true of any first-party script, and the bucket is named by the connector.
 - **WebRTC (J1 T27, red-team finding HIGH).** ICE traffic (STUN, TURN over UDP or TCP)
   goes straight to an IP and port the page names: neither `Fetch` nor the resolver rules
   see it, and the TURN `USERNAME` is page-chosen, a channel for anything the page can

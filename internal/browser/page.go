@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/FlorianRuen/facto/internal/connector"
@@ -117,6 +118,14 @@ type PageOptions struct {
 	// httpx.ParseAllowlist plus the flag rules (no IP literal, no loopback
 	// name); refused with ErrInvalidDomain.
 	AllowedDomains []string
+	// Static is the path-scoped static allowlist (static.go): GET/HEAD
+	// subresources under exact https prefixes; refused with
+	// ErrInvalidStatic. Never navigable, never used for cookies.
+	Static []string
+	// StaticClients builds the facto-side download of each Static entry
+	// (static.go). Required when Static is not empty: ErrInvalidStatic
+	// otherwise.
+	StaticClients StaticClients
 	// Log receives operation outcomes, never a URL, selector or value. Nil
 	// discards.
 	Log *slog.Logger
@@ -129,10 +138,17 @@ type PageOptions struct {
 // memory"). It implements connector.Browser. Close disposes the context;
 // it does not close the Client, which the pool owns.
 type Page struct {
-	c     *Client
-	allow httpx.Allowlist
-	log   *slog.Logger
-	wait  func(ctx context.Context) error
+	c      *Client
+	allow  httpx.Allowlist
+	static Static
+	// staticGets[i] downloads for static.entries[i]; staticSem bounds
+	// those downloads (fetch.go fulfillStatic).
+	staticGets []StaticGet
+	staticSem  chan struct{}
+	// staticPending counts static requests waiting for or in a download.
+	staticPending atomic.Int32
+	log           *slog.Logger
+	wait          func(ctx context.Context) error
 
 	contextID string
 	targetID  string
@@ -151,7 +167,8 @@ type Page struct {
 	running     int
 	subsChanged chan struct{} // closed and replaced on each change
 	stopped     bool
-	frozen      *frozenSet // the freeze in progress (freeze.go), nil otherwise
+	frozen      *frozenSet      // the freeze in progress (freeze.go), nil otherwise
+	taps        []*Subscription // network taps (tap.go), closed by stop
 
 	blockedMu sync.Mutex
 	blocked   map[string]int
@@ -196,8 +213,17 @@ func NewPage(ctx context.Context, c *Client, opts PageOptions) (*Page, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidDomain, err)
 	}
+	static, err := ParseStatic(opts.Static)
+	if err != nil {
+		return nil, err
+	}
+	gets, err := staticGets(static, opts.StaticClients)
+	if err != nil {
+		return nil, err
+	}
 	p := &Page{
-		c: c, allow: allow, log: opts.Log, wait: opts.PollWait, blocked: map[string]int{},
+		c: c, allow: allow, static: static, staticGets: gets, staticSem: make(chan struct{}, maxStaticInflight),
+		log: opts.Log, wait: opts.PollWait, blocked: map[string]int{},
 		sessions: map[string]*watched{}, subsChanged: make(chan struct{}),
 	}
 	p.bg, p.cancel = context.WithCancel(context.WithoutCancel(ctx))

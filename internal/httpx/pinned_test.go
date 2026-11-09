@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"slices"
 	"strings"
 	"testing"
@@ -339,5 +340,22 @@ func TestPinned_ErrorsOmitPathQueryAndFragment(t *testing.T) {
 		if strings.Contains(e.Error(), marker) {
 			t.Fatalf("error chain carries the refused path, query or fragment: %v", e)
 		}
+	}
+}
+
+// TestOptions_NoCookiesRefusesAJar: NoCookies and a jar together are a
+// contradiction, refused at build time.
+func TestOptions_NoCookiesRefusesAJar(t *testing.T) {
+	t.Parallel()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := httpx.NewPinned("example.com", "/app/", httpx.Options{NoCookies: true, Jar: jar}); err == nil {
+		t.Fatal("NoCookies with a jar accepted")
+	}
+	c, err := httpx.NewPinned("example.com", "/app/", httpx.Options{NoCookies: true})
+	if err != nil || c.Jar() != nil {
+		t.Fatalf("NoCookies client = %v, jar %v; want no jar", err, c.Jar())
 	}
 }

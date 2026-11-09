@@ -10,6 +10,7 @@
 - History available: (years)
 - Protections: (captcha, anti-bot, rate limit)
 - Allowed domains:
+- Browser static prefixes (app files on shared storage, GET only, e.g. `https://storage.googleapis.com/<bucket>/`):
 - Inspiration sources: (links, license; never copied)
 - Status: stable / beta / broken / unmaintained
 - Last verified on: (date, offline only | live by maintainer)

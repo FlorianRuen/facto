@@ -34,6 +34,9 @@ func (s *Scenario) validateFakeSite() error {
 	if len(s.Stdin) > maxStdin {
 		return fmt.Errorf("stdin: more than %d lines", maxStdin)
 	}
+	if s.Interactive && len(s.Stdin) > 0 {
+		return errors.New("interactive and stdin are exclusive")
+	}
 	for i, line := range s.Stdin {
 		if strings.ContainsAny(line, "\r\n\x00") {
 			return fmt.Errorf("stdin[%d]: one line each, no CR, LF or NUL", i)
@@ -163,7 +166,7 @@ func (r RequestExpect) validate(k string) error {
 		return fmt.Errorf("%s: negative count", k)
 	case r.Method != "" && !slices.Contains([]string{"GET", "POST", "HEAD"}, r.Method):
 		return fmt.Errorf("%s.method: want GET, POST or HEAD", k)
-	case r.Host != "" && !slices.Contains([]string{HostWWW, HostSSO, EvilHost}, r.Host):
+	case r.Host != "" && !slices.Contains([]string{HostWWW, HostSSO, HostStatic, EvilHost}, r.Host):
 		return fmt.Errorf("%s.host: %q is not served by the fake site", k, r.Host)
 	case r.Status != 0 && (r.Status < 100 || r.Status > 599):
 		return fmt.Errorf("%s.status: out of range", k)

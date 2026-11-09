@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/FlorianRuen/facto/internal/browser"
+	"github.com/FlorianRuen/facto/internal/browser/staticfetch"
 	"github.com/FlorianRuen/facto/internal/fsx"
 	"github.com/FlorianRuen/facto/internal/httpx"
 )
@@ -27,6 +28,7 @@ const (
 	e2eChromeEnv   = "FACTO_E2E_CHROME"   // absolute Chrome for Testing executable
 	e2eLoopbackEnv = "FACTO_E2E_LOOPBACK" // exactly 127.0.0.1:<1-65535>
 	e2eCAEnv       = "FACTO_E2E_CA"       // private PEM file of the fake site's test CA
+	e2eHeadlessEnv = "FACTO_E2E_HEADLESS" // "1": facto record launches headless (no display in CI)
 )
 
 // maxCABytes caps the FACTO_E2E_CA file.
@@ -45,6 +47,13 @@ func init() {
 // the file's content.
 func e2eRunHooks(e env) (runHooks, error) {
 	var h runHooks
+	switch v := e.lookupEnv(e2eHeadlessEnv); v {
+	case "", "0":
+	case "1":
+		h.Headless = true
+	default:
+		return runHooks{}, fmt.Errorf("%s: want 1 or 0", e2eHeadlessEnv)
+	}
 	if exe := e.lookupEnv(e2eChromeEnv); exe != "" {
 		if !filepath.IsAbs(exe) || filepath.Clean(exe) != exe {
 			return runHooks{}, fmt.Errorf("%s: want an absolute clean path", e2eChromeEnv)
@@ -88,6 +97,14 @@ func e2eRunHooks(e env) (runHooks, error) {
 		out, err := browser.WithE2E(cfg, pe)
 		if err != nil {
 			return browser.PoolConfig{}, fmt.Errorf("e2e pool: %w", err)
+		}
+		// Static downloads reach the fake site, still pinned per entry.
+		out.StaticClients = func(host, prefix string) (browser.StaticGet, error) {
+			c, err := httpx.NewPinnedLoopback(host, prefix, target, roots, httpx.Options{NoCookies: true})
+			if err != nil {
+				return nil, fmt.Errorf("e2e static client: %w", err)
+			}
+			return staticfetch.FromClient(c), nil
 		}
 		return out, nil
 	}

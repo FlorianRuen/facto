@@ -2,11 +2,14 @@ package browser
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
@@ -162,6 +165,10 @@ func (p *Page) release(session string) {
 func (p *Page) stop() {
 	p.subsMu.Lock()
 	p.stopped = true
+	for _, sub := range p.taps {
+		sub.Close()
+	}
+	p.taps = nil
 	for id, w := range p.sessions {
 		for _, sub := range w.subs {
 			sub.Close()
@@ -181,8 +188,9 @@ func (p *Page) enforceCtx() (context.Context, context.CancelFunc) {
 
 // pausedRequest is the part of Fetch.requestPaused the page reads.
 type pausedRequest struct {
-	RequestID string          `json:"requestId"`
-	Request   json.RawMessage `json:"request"`
+	RequestID    string          `json:"requestId"`
+	Request      json.RawMessage `json:"request"`
+	ResourceType string          `json:"resourceType"`
 }
 
 // onRequestPaused continues an allowed request as is, and fails any other
@@ -202,7 +210,9 @@ func (p *Page) onRequestPaused(ev Event) {
 		return
 	}
 	var req struct {
-		URL string `json:"url"`
+		URL     string            `json:"url"`
+		Method  string            `json:"method"`
+		Headers map[string]string `json:"headers"`
 	}
 	rawURL := ""
 	if len(pr.Request) > 0 && json.Unmarshal(pr.Request, &req) == nil {
@@ -214,6 +224,12 @@ func (p *Page) onRequestPaused(ev Event) {
 		if _, err := p.c.Call(ctx, ev.SessionID, "Fetch.continueRequest", map[string]any{"requestId": pr.RequestID}); err != nil {
 			p.log.Debug("browser: continue request failed", "error", err)
 		}
+		return
+	}
+	if i := p.staticEntry(rawURL, req.Method, pr.ResourceType); i >= 0 {
+		// Downloaded on facto's side off this session's queue: a slow
+		// static file must not hold the page's other requests.
+		p.fulfillStatic(ev.SessionID, pr.RequestID, i, req.Method, rawURL, req.Headers)
 		return
 	}
 	p.countBlocked(blockedHost(rawURL))
@@ -241,6 +257,16 @@ func (p *Page) requestAllowed(raw string) bool {
 		return false
 	}
 	return p.allow.Allows(u.Host)
+}
+
+// staticEntry is the index of the static entry a subresource may be
+// served from, or -1. Never a document, never a WebSocket.
+func (p *Page) staticEntry(raw, method, resourceType string) int {
+	switch resourceType {
+	case "Document", "WebSocket", "":
+		return -1
+	}
+	return p.static.match(raw, method)
 }
 
 // hasUnsafeChar reports a control character, a space or a backslash.
@@ -422,4 +448,140 @@ func (p *Page) enableChild(session string, parentFetch, nested bool) error {
 		}
 	}
 	return nil
+}
+
+// maxStaticInflight bounds the concurrent facto-side static downloads of
+// one page.
+const maxStaticInflight = 6
+
+// maxStaticPending bounds the static requests of one page waiting for or
+// in a download; more are failed at once (a page looping on fetch cannot
+// pile up goroutines).
+const maxStaticPending = 128
+
+// staticFetchTimeout bounds one facto-side static download.
+const staticFetchTimeout = 60 * time.Second
+
+// staticRequestHeaders are the only request headers forwarded to a static
+// host: what a CORS, range or cache request needs; never a credential
+// header (cookie, authorization) nor a custom one. (Accept is CORS
+// safelisted, so page-settable, like the path and query already are.)
+var staticRequestHeaders = []string{"Accept", "Origin", "Range", "If-None-Match", "If-Modified-Since"}
+
+// staticResponseHeaders are the only response headers handed back to
+// Chrome: what a script, style, font or image load needs. Never
+// Set-Cookie; never Content-Encoding (httpx already decoded the body).
+var staticResponseHeaders = []string{
+	"Content-Type", "Content-Range", "Accept-Ranges", "Cache-Control", "ETag", "Last-Modified",
+	"Access-Control-Allow-Origin", "Access-Control-Expose-Headers", "Timing-Allow-Origin",
+	"Cross-Origin-Resource-Policy", "X-Content-Type-Options", "Vary",
+}
+
+// fulfillStatic downloads the paused request through the entry's
+// StaticGet and fulfills it, in a page goroutine; any failure fails the
+// request (never continued: Chrome cannot resolve a static host). Nothing
+// of the URL is logged.
+func (p *Page) fulfillStatic(session, requestID string, entry int, method, rawURL string, headers map[string]string) {
+	header := map[string][]string{}
+	for _, allowed := range staticRequestHeaders {
+		for _, k := range slices.Sorted(maps.Keys(headers)) {
+			if strings.EqualFold(k, allowed) {
+				header[allowed] = []string{headers[k]}
+				break
+			}
+		}
+	}
+	if p.staticPending.Add(1) > maxStaticPending {
+		p.staticPending.Add(-1)
+		p.countBlocked(blockedHost(rawURL))
+		p.log.Debug("browser: too many pending static downloads")
+		ctx, cancel := p.enforceCtx()
+		defer cancel()
+		if _, err := p.c.Call(ctx, session, "Fetch.failRequest", map[string]any{
+			"requestId": requestID, "errorReason": "Failed",
+		}); err != nil {
+			p.log.Debug("browser: fail request failed", "error", err)
+		}
+		return
+	}
+	p.wg.Go(func() {
+		defer p.staticPending.Add(-1)
+		// One slot covers the download and the hand-over to Chrome, so at
+		// most maxStaticInflight bodies (and their base64 copies) are held
+		// at once (SEC-J2-9).
+		select {
+		case p.staticSem <- struct{}{}:
+			defer func() { <-p.staticSem }()
+		case <-p.bg.Done():
+			return
+		}
+		res, err := p.staticDownload(entry, method, rawURL, header)
+		ctx, cancel := p.enforceCtx()
+		defer cancel()
+		if err != nil || res.Status < 200 || res.Status > 599 {
+			p.countBlocked(blockedHost(rawURL))
+			p.log.Debug("browser: static download failed", "error", err)
+			if _, err := p.c.Call(ctx, session, "Fetch.failRequest", map[string]any{
+				"requestId": requestID, "errorReason": "Failed",
+			}); err != nil {
+				p.log.Debug("browser: fail request failed", "error", err)
+			}
+			return
+		}
+		params := map[string]any{
+			"requestId": requestID, "responseCode": res.Status,
+			"responseHeaders": staticHeaderEntries(res.Header),
+			"body":            base64.StdEncoding.EncodeToString(res.Body),
+		}
+		if _, err := p.c.Call(ctx, session, "Fetch.fulfillRequest", params); err != nil {
+			p.log.Debug("browser: fulfill request failed", "error", err)
+		}
+	})
+}
+
+// staticDownload runs one bounded download; the caller holds a staticSem
+// slot.
+func (p *Page) staticDownload(entry int, method, rawURL string, header map[string][]string) (StaticResponse, error) {
+	ctx, cancel := context.WithTimeout(p.bg, staticFetchTimeout)
+	defer cancel()
+	res, err := p.staticGets[entry](ctx, method, rawURL, header)
+	if err != nil {
+		return StaticResponse{}, err
+	}
+	if len(res.Body) > MaxStaticBody {
+		return StaticResponse{}, errStaticTooLarge
+	}
+	return res, nil
+}
+
+// errStaticTooLarge reports a static download over MaxStaticBody.
+var errStaticTooLarge = errors.New("browser: static download over MaxStaticBody")
+
+// staticHeaderEntries keeps the staticResponseHeaders of h, as
+// Fetch.fulfillRequest header entries in a stable order.
+func staticHeaderEntries(h map[string][]string) []map[string]string {
+	out := []map[string]string{}
+	for _, name := range staticResponseHeaders {
+		for k, vs := range h {
+			if !strings.EqualFold(k, name) {
+				continue
+			}
+			for _, v := range vs {
+				if !hasCtl(v) {
+					out = append(out, map[string]string{"name": name, "value": v})
+				}
+			}
+		}
+	}
+	return out
+}
+
+// hasCtl reports a control character (a header value must not carry one).
+func hasCtl(v string) bool {
+	for i := range len(v) {
+		if c := v[i]; (c < ' ' && c != '\t') || c == 0x7f {
+			return true
+		}
+	}
+	return false
 }

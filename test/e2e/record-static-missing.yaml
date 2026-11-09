@@ -1,0 +1,38 @@
+name: record-static-missing
+description: >
+  J2 control for record-fakeprovider: without --allow-static the app bundle
+  on shared storage is blocked by the in-browser allowlist, the account page
+  stays an empty shell (what Wecasa showed), #done never appears and the
+  recording stops on its timeout. The bundle request is in the HAR as
+  blocked; the storage host never sees a request.
+setup:
+  - path: rec
+    dir: true
+args: [record, "https://www.fakeprovider.test/login", --connector, fakeprovider, --out, "{{home}}/rec/fakeprovider.har", --until, "#done", --timeout, 20s]
+fakesite:
+  mode: record
+  login: fp/login
+  password: fp/password
+  invoices:
+    - { id: FP-2026-0001, contract: C-1, issued_at: 2026-03-14, amount_cents: 8412, currency: EUR, fixture: edf-invoice.pdf }
+secrets:
+  fp/login: "user-{{canary:token}}"
+  fp/password: "{{canary:password}}"
+interactive: true
+expect:
+  exit: 0
+  stderr:
+    contains: ["stopping (timeout)"]
+  files:
+    - path: rec/fakeprovider.har
+      mode: "0600"
+      contains:
+        - "https://static.fakeprovider.test/app/list.js"
+        - "ERR_BLOCKED_BY_CLIENT"
+  requests:
+    - { method: POST, host: www.fakeprovider.test, path: /login, count: 1 }
+    - { host: static.fakeprovider.test, count: 0 }
+    - { path: /api/invoices, count: 0 }
+  browser:
+    no_cdp_port: true
+    profile_removed: true

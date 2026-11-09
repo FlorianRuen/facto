@@ -780,7 +780,7 @@ func siteCertificate(t *testing.T) (tls.Certificate, string) {
 	leafTmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(2),
 		Subject:      pkix.Name{CommonName: siteHost},
-		DNSNames:     []string{siteHost},
+		DNSNames:     []string{siteHost, staticHost},
 		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1)},
 		NotBefore:    notBefore,
 		NotAfter:     notAfter,

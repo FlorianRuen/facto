@@ -1,8 +1,8 @@
 {
-  "date": "2026-11-04",
-  "milestone": "J1",
-  "commit": "8c50a29187b91f1e7f672f279623b86875baa201",
-  "code_tree": "e831b43d5333be33f8c5c077527c71b6c3cd73a955e7da57bc77428f87608656",
+  "date": "2026-11-09",
+  "milestone": "J2",
+  "commit": "f75119df5d632adbdcc6e7f051759a24a4981e65",
+  "code_tree": "4d39a07e975f0845fecd21c92ce34366299cf49b5394dffbf4205d8697cf0dcd",
   "total": 85,
   "categories": [
     {
@@ -430,6 +430,142 @@
       "location": "internal/orchestrator/run.go:492 (CodeQL #14)",
       "status": "fixed",
       "regression_test": "internal/orchestrator/errattr_internal_test.go"
+    },
+    {
+      "id": "SEC-J2-1",
+      "category": 5,
+      "severity": "high",
+      "location": "internal/browser/flags.go:97-108, internal/browser/fetch.go:225-236,487-531, internal/browser/static.go:153-190, internal/browser/staticfetch",
+      "status": "fixed",
+      "regression_test": "TestAttack_ChromeStaticHostWebSocketBlocked, TestFlags_StaticHostsNeverResolvable, TestFlagsE2E_StaticHostNeverMapped, TestFetch_StaticFulfilledByFactoUnderPrefixOnly, TestFetch_StaticHeadersFiltered, TestFetch_StaticPendingCapped, TestPinned_RefusesOffPrefixAndRedirectOut"
+    },
+    {
+      "id": "SEC-J2-2",
+      "category": 4,
+      "severity": "high",
+      "location": "internal/har/reqbody.go, internal/har/har.go:279-290, internal/har/taint.go:99",
+      "status": "fixed",
+      "regression_test": "TestRedact_RequestBodiesAnyEncoding, TestRedact_DroppedRequestBodySaysSo, TestRedact_MultipartIdempotent, test/e2e record-fakeprovider (FormData login)"
+    },
+    {
+      "id": "SEC-J2-3",
+      "category": 4,
+      "severity": "low",
+      "location": "internal/fixtures/scan.go:49-53,68-73",
+      "status": "fixed",
+      "regression_test": "TestScan_MultipartSecretParts"
+    },
+    {
+      "id": "SEC-J2-4",
+      "category": 10,
+      "severity": "low",
+      "location": "docs/security.md:21-40,480-505",
+      "status": "fixed",
+      "regression_test": "auditor review per milestone (docs/security.md \"State at J2\")"
+    },
+    {
+      "id": "SEC-J2-5",
+      "category": 7,
+      "severity": "low",
+      "location": "internal/record/record.go (DefaultMaxBodyTotal)",
+      "status": "fixed",
+      "regression_test": "TestRecorder_CapsTotalBodyBytes"
+    },
+    {
+      "id": "SEC-J2-6",
+      "category": 4,
+      "severity": "high",
+      "location": "internal/har/reqbody.go:68-98,103-119,181-193",
+      "status": "fixed",
+      "regression_test": "TestRedact_RequestBodyNestedEncodings, TestRedact_RequestBodiesAnyEncoding, test/e2e record-fakeprovider (JSON under x-www-form-urlencoded, FormData)"
+    },
+    {
+      "id": "SEC-J2-7",
+      "category": 10,
+      "severity": "low",
+      "location": "internal/browser/staticfetch/staticfetch.go:25-26, internal/httpx/httpx.go:84-86,116-120",
+      "status": "fixed",
+      "regression_test": "TestPinned_NoCookieJar, TestOptions_NoCookiesRefusesAJar"
+    },
+    {
+      "id": "SEC-J2-8",
+      "category": 4,
+      "severity": "low",
+      "location": "internal/fixtures/scan.go:125-131",
+      "status": "fixed",
+      "regression_test": "TestScan_EscapedJSONSecretField"
+    },
+    {
+      "id": "SEC-J2-9",
+      "category": 7,
+      "severity": "low",
+      "location": "internal/browser/fetch.go:510-539",
+      "status": "fixed",
+      "regression_test": "TestFetch_StaticBodiesHeldBounded"
+    },
+    {
+      "id": "SEC-J2-10",
+      "category": 4,
+      "severity": "high",
+      "location": "internal/har/reqbody.go:91-105,131-165,171-188,229-246, internal/fixtures/scan.go:130-154",
+      "status": "fixed",
+      "regression_test": "TestRedact_RequestBodyEveryValueRedacted, TestRedact_OpenAMValueTaintedFileWide"
+    },
+    {
+      "id": "SEC-J2-11",
+      "category": 4,
+      "severity": "medium",
+      "location": "internal/har/reqbody.go:384-399, internal/har/har.go:283",
+      "status": "fixed",
+      "regression_test": "TestRedact_ParamsEveryValueRedacted"
+    },
+    {
+      "id": "SEC-J2-12",
+      "category": 4,
+      "severity": "low",
+      "location": "internal/fixtures/scan.go:130-154",
+      "status": "fixed",
+      "regression_test": "TestScan_NeutralNamePairsAndDeepEscapes"
+    },
+    {
+      "id": "SEC-J2-13",
+      "category": 4,
+      "severity": "medium",
+      "location": "internal/har/names.go:17-52 (fieldName, dataLike), internal/har/reqbody.go:143 (JSON keys), :230 (urlencoded names), :353-374 (partHead), :423 (params)",
+      "status": "fixed",
+      "regression_test": "TestRedact_RequestBodyNamesCarryNoData, TestRedact_FieldNamesAndDocumentsKept, TestRedact_ParamsEveryValueRedacted"
+    },
+    {
+      "id": "SEC-J2-14",
+      "category": 4,
+      "severity": "low",
+      "location": "internal/har/reqbody.go:195, internal/har/names.go:80-111 (redactGraphQL)",
+      "status": "fixed",
+      "regression_test": "TestRedact_RequestBodyNamesCarryNoData (query not a document, query login, js literal object, query prefix text, graphql comment/alias/dot/plus/hex number), TestRedact_FieldNamesAndDocumentsKept"
+    },
+    {
+      "id": "SEC-J2-15",
+      "category": 4,
+      "severity": "low",
+      "status": "fixed",
+      "location": "internal/har/names.go:36-67 (dataLike, hexTokenRE, uuidRE), internal/har/reqbody.go:232-233 (pairs, loneToken)",
+      "regression_test": "TestRedact_RequestBodyDataShapedNames"
+    },
+    {
+      "id": "SEC-J2-16",
+      "category": 4,
+      "severity": "low",
+      "status": "fixed",
+      "location": "internal/har/names.go:104-114 (enum argument redaction)",
+      "regression_test": "TestRedact_GraphQLEnumArgumentsRedacted"
+    },
+    {
+      "id": "SEC-J2-17",
+      "category": 4,
+      "severity": "low",
+      "location": "internal/har/names.go:32-94 (dataLike: hex/UUID, lowercase 32+, digit runs, case flips)",
+      "status": "fixed",
+      "regression_test": "TestDataLikeNames, TestRedact_LetterLedTokenNames"
     }
   ],
   "scanners": {
