@@ -3,9 +3,12 @@ package har
 import (
 	"bytes"
 	"encoding/json"
+	"maps"
 	"mime"
 	"net/url"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -47,10 +50,6 @@ const maxNesting = 6
 // taint of dropped bodies.
 var argRE = regexp.MustCompile(`([A-Za-z_$][A-Za-z0-9_$.\[\]-]{0,63})(\s*[:=]\s*)("""(?s:.*?)"""|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,()\[\]{}"'=&\\]+)`)
 
-// gqlLiteralRE is a GraphQL string literal (block or quoted, escapes
-// included) or a number literal not glued to a name.
-var gqlLiteralRE = regexp.MustCompile(`"""(?s:.*?)"""|"(?:[^"\\\n]|\\.)*"|(?:^|[^A-Za-z0-9_$.])-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?`)
-
 // gqlDocRE is the start of a GraphQL document.
 var gqlDocRE = regexp.MustCompile(`^\s*(?:query|mutation|subscription|fragment)\b|^\s*\{`)
 
@@ -64,9 +63,6 @@ var multipartValueRE = regexp.MustCompile(`(?i)form-data;[^\n]*?\bname="([^"]{1,
 
 // pairNameRE is a plausible urlencoded field name (escaped form).
 var pairNameRE = regexp.MustCompile(`^[A-Za-z0-9_.\[\]%~+-]{1,128}$`)
-
-// paramNameRE is a plausible decoded field name (postData.params).
-var paramNameRE = regexp.MustCompile(`^[A-Za-z0-9_.\[\]~:-]{1,128}$`)
 
 // reqRedactor redacts one request body.
 type reqRedactor struct {
@@ -136,13 +132,30 @@ func (r *reqRedactor) value(v any, key string, depth int) any {
 		if name, ok := x["name"].(string); ok && credentialName(name) {
 			r.taintValue(x["value"])
 		}
-		for k, val := range x {
+		out := make(map[string]any, len(x))
+		renamed := 0
+		for _, k := range slices.Sorted(maps.Keys(x)) {
+			val := x[k]
 			if credentialName(k) {
 				r.taintValue(val)
 			}
-			x[k] = r.value(val, k, depth)
+			nk := k
+			if !fieldName(k) {
+				// Data in a key (an email, a token): redacted like a
+				// value, numbered so keys stay distinct (SEC-J2-13).
+				r.taint(k)
+				for nk = Redacted; ; nk = "[redacted-" + strconv.Itoa(renamed) + "]" {
+					if _, taken := x[nk]; !taken {
+						if _, used := out[nk]; !used {
+							break
+						}
+					}
+					renamed++
+				}
+			}
+			out[nk] = r.value(val, k, depth)
 		}
-		return x
+		return out
 	case []any:
 		for i := range x {
 			x[i] = r.value(x[i], key, depth)
@@ -177,35 +190,15 @@ func (r *reqRedactor) str(s, key string, depth int) string {
 			return out
 		}
 	}
-	if strings.EqualFold(key, "query") || gqlDocRE.MatchString(s) {
-		if out, ok := r.graphQL(s); ok {
+	// A GraphQL document keeps its shape only under "query" and only when
+	// it is one once its literals are gone (SEC-J2-14).
+	if strings.EqualFold(key, "query") && gqlDocRE.MatchString(s) {
+		r.taintArgs(s)
+		if out, ok := redactGraphQL(s); ok {
 			return out
 		}
 	}
 	return Redacted
-}
-
-// graphQL redacts every string and number literal of a GraphQL document.
-// ok is false when a quote is left over (an unbalanced or unknown literal
-// form): the caller then redacts the whole string.
-func (r *reqRedactor) graphQL(doc string) (string, bool) {
-	r.taintArgs(doc)
-	out := gqlLiteralRE.ReplaceAllStringFunc(doc, func(m string) string {
-		switch {
-		case strings.HasPrefix(m, `"""`):
-			return `"""` + Redacted + `"""`
-		case strings.HasPrefix(m, `"`):
-			return `"` + Redacted + `"`
-		}
-		// A number, with the one character before it kept.
-		i := strings.IndexAny(m, "-0123456789")
-		return m[:i] + Redacted
-	})
-	rest := strings.NewReplacer(`"""`+Redacted+`"""`, "", `"`+Redacted+`"`, "").Replace(out)
-	if strings.ContainsAny(rest, "\"'`\\") {
-		return "", false
-	}
-	return out, true
 }
 
 // urlencodedShape reports text made only of name=value pairs joined by
@@ -230,12 +223,23 @@ func (r *reqRedactor) pairs(q string) string {
 	parts := strings.Split(q, "&")
 	for i, p := range parts {
 		k, v, _ := strings.Cut(p, "=")
-		if v == "" {
-			continue
-		}
 		name, err := url.QueryUnescape(k)
 		if err != nil {
 			name = k
+		}
+		if !fieldName(name) {
+			// Data in a name (a raw base64 body reads as one name with an
+			// empty value): redacted like a value (SEC-J2-13).
+			r.taint(name)
+			k = url.QueryEscape(Redacted)
+			parts[i] = k + "=" + v
+		}
+		if v == "" {
+			parts[i] = k + "="
+			if !strings.Contains(p, "=") {
+				parts[i] = k
+			}
+			continue
 		}
 		if credentialName(name) {
 			if val, err := url.QueryUnescape(v); err == nil {
@@ -333,10 +337,38 @@ func (r *reqRedactor) multipart(text, boundary string) (string, bool) {
 			}
 			p.body = Redacted
 		}
-		b.WriteString(delim + "\r\n" + p.head + "\r\n\r\n" + p.body + "\r\n")
+		b.WriteString(delim + "\r\n" + r.partHead(p) + "\r\n\r\n" + p.body + "\r\n")
 	}
 	b.WriteString(delim + "--\r\n")
 	return b.String(), true
+}
+
+// mediaTypeRE is a bare media type (a part's Content-Type).
+var mediaTypeRE = regexp.MustCompile(`^[A-Za-z0-9!#$&^_.+-]{1,64}/[A-Za-z0-9!#$&^_.+-]{1,64}$`)
+
+// partHead rebuilds a part's headers from what a connector author needs:
+// its name (Redacted unless it looks like a field name), a redacted
+// filename for a file part, and a bare Content-Type. Every other header,
+// and any parameter, is left out (SEC-J2-13).
+func (r *reqRedactor) partHead(p multipartPart) string {
+	name := p.name
+	if !fieldName(name) {
+		r.taint(name)
+		name = Redacted
+	}
+	h := `Content-Disposition: form-data; name="` + name + `"`
+	if p.file {
+		h += `; filename="` + Redacted + `"`
+	}
+	for line := range strings.SplitSeq(p.head, "\r\n") {
+		k, v, _ := strings.Cut(line, ":")
+		if strings.EqualFold(strings.TrimSpace(k), "Content-Type") {
+			if mt := strings.TrimSpace(v); mediaTypeRE.MatchString(mt) {
+				h += "\r\nContent-Type: " + mt
+			}
+		}
+	}
+	return h
 }
 
 // taintArgs taints the values of named credential arguments in s.
@@ -388,7 +420,7 @@ func redactParams(nv []NV) []NV {
 	out := make([]NV, len(nv))
 	for i, p := range nv {
 		out[i] = p
-		if !paramNameRE.MatchString(p.Name) {
+		if !fieldName(p.Name) {
 			out[i].Name = Redacted
 		}
 		if p.Value != "" {

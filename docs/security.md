@@ -498,8 +498,12 @@ browser too.
   sends `{"name":"IDToken2","value":…}`): JSON, whatever the declared content type, keeps
   keys, nesting, booleans and nulls, every string and number becomes `[redacted]`, a
   string that is JSON is unwrapped (up to 6 levels) and a GraphQL document keeps its text
-  without literals; urlencoded pairs and multipart parts keep their names; `postData.params`
-  the same. A multipart body that does not split cleanly (duplicate `Content-Disposition`,
+  without literals (only under a `query` key, and only when what is left is a document);
+  urlencoded pairs and multipart parts keep their names; `postData.params` the same. A name
+  is kept only when it looks like a field name (identifier-shaped, not a random-looking
+  token): data put where a name is expected, such as a raw base64 body, a JSON key that is
+  an email, or a multipart `filename` or extra header, is redacted too (SEC-J2-13,
+  SEC-J2-14). A multipart body that does not split cleanly (duplicate `Content-Disposition`,
   stray delimiter) and any other body (prose text/plain, XML, binary, invalid JSON) is
   dropped with a comment. The file-wide taint stays name-based (request fields, name/value
   pairs, OpenAM `IDToken` inputs) so ids the responses repeat are kept. JWTs, bearer

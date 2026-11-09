@@ -397,3 +397,76 @@ func TestRedact_ParamsEveryValueRedacted(t *testing.T) {
 		t.Error("Check found nothing in unredacted params")
 	}
 }
+
+// SEC-J2-13: data placed where a name is expected (a raw base64
+// "login:secret" body, a login as a JSON key, a multipart filename or
+// extra header) is redacted like a value. SEC-J2-14: a string is kept as
+// GraphQL only when it is a real document once its literals are gone.
+func TestRedact_RequestBodyNamesCarryNoData(t *testing.T) {
+	t.Parallel()
+	// A synthetic random-looking value (not a real credential).
+	sample := "Zq7Canary91xPw"
+	login := "alice.audit@example.org"
+	b64 := "YWxpY2UuYXVkaXRAZXhhbXBsZS5vcmc6WnE3Q2FuYXJ5OTF4UHc="
+	cases := []struct{ name, mime, body, secret string }{
+		{"raw b64 text/plain", "text/plain;charset=UTF-8", b64, strings.TrimRight(b64, "=")},
+		{"raw b64 urlencoded", "application/x-www-form-urlencoded", b64, strings.TrimRight(b64, "=")},
+		{"raw b64 no type", "", b64, strings.TrimRight(b64, "=")},
+		{"urlencoded name", "application/x-www-form-urlencoded", "u=1&" + sample + "=", sample},
+		{"json key login", "application/json", `{"accounts":{"` + login + `":{"remember":true}}}`, login},
+		{"json key secret", "application/json", `{"` + sample + `":true}`, sample},
+		{"multipart filename", "multipart/form-data; boundary=XyZ", "--XyZ\r\nContent-Disposition: form-data; name=\"doc\"; filename=\"" + login + ".pdf\"\r\n\r\nabc\r\n--XyZ--\r\n", login},
+		{"multipart header", "multipart/form-data; boundary=XyZ", "--XyZ\r\nContent-Disposition: form-data; name=\"a\"\r\nX-Pw: " + sample + "\r\n\r\nabc\r\n--XyZ--\r\n", sample},
+		{"query not a document", "application/json", `{"query":"` + sample + `"}`, sample},
+		{"query login", "application/json", `{"query":"` + login + `"}`, login},
+		{"js literal object", "application/json", `{"data":"{u:alice,p:` + sample + `}"}`, sample},
+		{"query prefix text", "application/json", `{"msg":"query ` + sample + `"}`, sample},
+		{"graphql enum arg", "application/json", `{"query":"mutation { login(user: alice, pin: ABCD` + sample + `) { ok } }"}`, sample},
+		{"graphql comment", "application/json", `{"query":"mutation { login(pin: $p) { ok } } # ` + sample + `"}`, sample},
+		{"graphql alias", "application/json", `{"query":"mutation { ` + sample + `: login(pin: 1) { ok } }"}`, sample},
+		{"graphql dot number", "application/json", `{"query":"mutation { login(pin: .1234) { ok } }"}`, "1234"},
+		{"graphql plus number", "application/json", `{"query":"mutation { login(pin: +1234) { ok } }"}`, "1234"},
+		{"graphql hex number", "application/json", `{"query":"mutation { login(pin: 0x1234beef) { ok } }"}`, "1234beef"},
+		{"big number", "application/json", `{"pin":12345678901234567890123}`, "12345678901234567890123"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out, findings := recordPipeline(t, postEntry(tc.mime, tc.body))
+			if strings.Contains(out, tc.secret) {
+				t.Errorf("recorded file still holds the data (%d bytes)", len(tc.secret))
+			}
+			if len(findings) == 0 {
+				t.Errorf("Check on the raw entry found nothing")
+			}
+		})
+	}
+}
+
+// TestRedact_FieldNamesAndDocumentsKept: the structure a connector author
+// needs survives: ordinary field names, JSON-LD keys, OpenAM IDToken
+// names, empty form fields, multipart part names, and a real GraphQL
+// document with its variables.
+func TestRedact_FieldNamesAndDocumentsKept(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ mime, body string }{
+		{"application/x-www-form-urlencoded", "user%5Bemail%5D=x&user%5Bpassword%5D=y&commit=Sign+in&remember_me="},
+		{"application/json", `{"@type":"Login","IDToken2":"x","address2Line":"y","utf8":"z","callbacks":[]}`},
+		{"application/json", `{"query":"mutation Login($e: String!, $p: String!) { login(email: $e, password: $p, remember: true, kind: CUSTOMER) { token user { id } } }","variables":{"e":"x","p":"y"}}`},
+		{"multipart/form-data; boundary=XyZ", "--XyZ\r\nContent-Disposition: form-data; name=\"user[email]\"\r\n\r\nx\r\n--XyZ--\r\n"},
+	}
+	want := [][]string{
+		{"user%5Bemail%5D=", "commit=", "remember_me="},
+		{"@type", "IDToken2", "address2Line", "utf8", "callbacks"},
+		{"mutation Login($e: String!, $p: String!)", "login(email: $e", "remember: true", "token user { id }"},
+		{`name=\"user[email]\"`},
+	}
+	for i, tc := range cases {
+		out, _ := recordPipeline(t, postEntry(tc.mime, tc.body))
+		for _, k := range want[i] {
+			if !strings.Contains(out, k) && !strings.Contains(out, jsonText(k)) {
+				t.Errorf("case %d: structure %q lost", i, k)
+			}
+		}
+	}
+}
