@@ -25,7 +25,7 @@ websites themselves.
 | Reading persisted sessions | AEAD-encrypted sessions, key in keyring or password manager; `sessions: ephemeral` | Done: XChaCha20-Poly1305, one key per connector in the OS keyring, rotated on every login. Ephemeral mode removes saved sessions without reading them ([ADR 0009](adr/0009-vault-aead.md), `internal/vault`) |
 | Exfiltration from the login page | Domain allowlist monitored in the browser | Done: in-browser allowlist on every target (pages, frames, workers, pop-ups), resolver rules and a WebRTC policy (`internal/browser`, ADR 0008 "Hardening") |
 | Exfiltration through a shared static host (J2) | App bundle on shared storage allowed by exact path prefix only | Done: a static host is never resolvable in Chrome; facto downloads allowed GET/HEAD subresources itself through `httpx.NewPinned` and fulfills them, so no WebSocket or other path of the host is reachable (SEC-J2-1, [Static allowlist](#static-allowlist-and-recordings-j2)) |
-| Credentials in a recording (J2) | `facto record` redacts before writing; raw HARs never committed | Done: headers, cookies, secret and login fields in urlencoded, JSON (GraphQL arguments included) and multipart bodies; any other request body dropped; values seen in a secret position scrubbed file-wide; `har.Check` must be clean or nothing is written (SEC-J2-2). Files are 0600 and refused in a git work tree or a synced folder |
+| Credentials in a recording (J2) | `facto record` redacts before writing; raw HARs never committed | Done: headers, cookies, secret fields in URLs; request bodies keep their structure and lose every value whatever its name (JSON, urlencoded, multipart, nested JSON, GraphQL literals); any other request body dropped; values seen in a secret position scrubbed file-wide; `har.Check` must be clean or nothing is written (SEC-J2-2). Files are 0600 and refused in a git work tree or a synced folder |
 | Leak through sync | Refuse a state dir inside the output folder or a synced folder | Done: `internal/config` (ADR 0007, D1, lexical) and `cmd/facto` (output folder and synced folders, symlinks followed, SEC-J0-17); synced-folder detection is name-based, see limitations |
 | Leak in logs, reports, errors | `Secret` type, redaction by key and pattern, no HTTP bodies logged | Done: redacting logger, clean reports, `secret.Secret` (`internal/secret`), config errors never echo values. The browser logs counts and classes only, never a CDP payload or Chrome's stderr |
 | Leak through the command line | No secret in argv; subprocess-only environment | Done in `internal/secret/bitwarden`; no CLI flag takes a secret. `collect` and `login` build one secret resolver and close it (password manager locked) on success, error and `SIGTERM` (SEC-J0-22, narrowed). Chrome gets an allowlisted environment and no secret on argv |
@@ -491,24 +491,27 @@ browser too.
   headers cross in either direction, never a cookie. Documents, WebSockets, other paths
   and other methods never reach the host. ADR 0008 "Path-scoped static allowlist";
   real-Chrome test `TestAttack_ChromeStaticHostWebSocketBlocked`.
-- **Recordings (SEC-J2-2, SEC-J2-5, SEC-J2-6).** `facto record` redacts every entry before
-  keeping it (`internal/har`): secret headers and cookie values; secret fields in URLs;
-  secret and login fields of request bodies whatever the declared content type (JSON
-  posted as urlencoded, as jQuery does, is parsed as JSON), recursively through nested
-  encodings (JSON inside a JSON string or a urlencoded value, urlencoded or JSON inside a
-  multipart part, up to 6 levels), GraphQL arguments included (quoted, block strings, bare
-  numbers); multipart file parts; a multipart body that does not split cleanly
-  (duplicate `Content-Disposition`, stray delimiter) and any other body (prose text/plain,
-  XML, binary, invalid JSON) is dropped with a comment. The taint collects exactly what
-  this redaction removes. JWTs, bearer
+- **Recordings (SEC-J2-2, SEC-J2-5, SEC-J2-6, SEC-J2-10, SEC-J2-11).** `facto record`
+  redacts every entry before keeping it (`internal/har`): secret headers and cookie values;
+  secret fields in URLs. **Request bodies keep their structure and lose every value,
+  whatever its name** (field-name rules can never list every credential name: OpenAM
+  sends `{"name":"IDToken2","value":…}`): JSON, whatever the declared content type, keeps
+  keys, nesting, booleans and nulls, every string and number becomes `[redacted]`, a
+  string that is JSON is unwrapped (up to 6 levels) and a GraphQL document keeps its text
+  without literals; urlencoded pairs and multipart parts keep their names; `postData.params`
+  the same. A multipart body that does not split cleanly (duplicate `Content-Disposition`,
+  stray delimiter) and any other body (prose text/plain, XML, binary, invalid JSON) is
+  dropped with a comment. The file-wide taint stays name-based (request fields, name/value
+  pairs, OpenAM `IDToken` inputs) so ids the responses repeat are kept. JWTs, bearer
   credentials, password inputs, inline script secrets and CSRF meta tags are removed from
   any text, binary response bodies are dropped, and every value seen in a secret position
   is scrubbed from the whole file. The file is written only if `har.Check` finds nothing.
   Response text bodies are capped at 2 MiB each and about 256 MiB per recording (a body
   is held whole until it is redacted and cut).
-- **Fixture scan (SEC-J2-3, SEC-J2-8).** `scripts/fixtures/scan.sh` also flags a multipart
-  part named like a secret, raw or JSON-escaped, and secret fields of a JSON body kept as a
-  JSON string (`flow.json`).
+- **Fixture scan (SEC-J2-3, SEC-J2-8, SEC-J2-12).** `scripts/fixtures/scan.sh` also flags a
+  multipart part named like a secret, raw or JSON-escaped; secret fields of a JSON body
+  kept as a JSON string, up to three escaping levels (`flow.json`); name/value pairs whose
+  name is a secret field or an OpenAM `IDToken`; and GraphQL block strings.
 
 ### Windows debug port (accepted MEDIUM)
 

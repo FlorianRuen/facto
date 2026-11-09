@@ -457,8 +457,9 @@ This is not legal advice.
   `--since` and `--only` are planned (spec, "Commands"). Write `config.yaml` by
   hand.
 - **`facto record` removes credentials, not personal data.** The HAR it writes
-  has no password, login sent in a form, cookie value, `Authorization` header,
-  token or PDF body, but pages keep names, addresses and contract numbers.
+  has no password, cookie value, `Authorization` header, token or PDF body,
+  and no value the page sent in a request body (field names are kept), but
+  pages keep names, addresses and contract numbers.
   It refuses to write inside a git work tree or a synced folder. Turn it into
   fixtures with `scripts/harslim`, `scripts/fixtures/sanitize.sh` and
   `scripts/fixtures/scan.sh`. If a page stays empty, list the blocked hosts

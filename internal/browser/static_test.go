@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/FlorianRuen/facto/internal/browser"
 )
@@ -416,4 +417,41 @@ func TestFetch_StaticPendingCapped(t *testing.T) {
 	}
 	close(fs.block)
 	e.f.waitCalls(t, 128, func(c cdpCall) bool { return c.Method == "Fetch.fulfillRequest" })
+}
+
+// TestFetch_StaticBodiesHeldBounded (SEC-J2-9): one slot covers the
+// download and the hand-over to Chrome. While fulfillRequest is stuck, no
+// more than the in-flight limit (6) of downloads ever start, so at most
+// that many bodies (and their base64 copies) are held.
+func TestFetch_StaticBodiesHeldBounded(t *testing.T) {
+	t.Parallel()
+	e, fs := newStaticPage(t)
+	release := make(chan struct{})
+	e.f.setIntercept("Fetch.fulfillRequest", func(cdpCall) any {
+		<-release
+		return nil
+	})
+	e.navigate(t, loginURL)
+	const n = 20
+	for i := range n {
+		e.f.requestPaused(fakeSessionID, fmt.Sprintf("b-%d", i), testStatic+fmt.Sprintf("b%d.js", i), "Script", nil)
+	}
+	e.f.waitCalls(t, 1, func(c cdpCall) bool { return c.Method == "Fetch.fulfillRequest" })
+	deadline := time.NewTimer(300 * time.Millisecond)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for done := false; !done; {
+		select {
+		case <-deadline.C:
+			done = true
+		case <-tick.C:
+		}
+		if got := len(fs.snapshot()); got > 6 {
+			close(release)
+			t.Fatalf("%d downloads started while fulfillRequest was stuck, want <= 6", got)
+		}
+	}
+	close(release)
+	e.f.waitCalls(t, n, func(c cdpCall) bool { return c.Method == "Fetch.fulfillRequest" })
 }
