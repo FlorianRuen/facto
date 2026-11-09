@@ -280,7 +280,7 @@ func redactRequest(r Request) Request {
 	out.QueryString = redactNV(r.QueryString)
 	if r.PostData != nil {
 		pd := *r.PostData
-		pd.Params = redactNVWith(pd.Params, requestField)
+		pd.Params = redactParams(pd.Params)
 		if text, ok := redactRequestBody(pd.MimeType, pd.Text); ok {
 			pd.Text = text
 		} else {

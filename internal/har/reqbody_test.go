@@ -76,7 +76,8 @@ func TestRedact_RequestBodiesAnyEncoding(t *testing.T) {
 		"multipart": {
 			mime: "multipart/form-data; boundary=" + mpBoundary,
 			body: multipartBody([2]string{"user[email]", login}, [2]string{"user[password]", pw}, [2]string{"commit", "Sign in"}),
-			keep: []string{"commit", "Sign in", `name="user[password]"`},
+			// Values are all redacted (SEC-J2-10); names stay.
+			keep: []string{`name="commit"`, `name="user[password]"`},
 		},
 		"multipart short password": {
 			mime: "multipart/form-data; boundary=" + mpBoundary,
@@ -250,7 +251,7 @@ func TestRedact_RequestBodyNestedEncodings(t *testing.T) {
 			"application/x-www-form-urlencoded",
 			"message=" + neturl.QueryEscape(aura) + "&aura.context=x",
 			[]string{pw, login},
-			[]string{"aura.context=x"},
+			[]string{"aura.context="},
 		},
 		"graphql block string": {
 			"application/json",
@@ -277,7 +278,7 @@ func TestRedact_RequestBodyNestedEncodings(t *testing.T) {
 			[]string{"operations"},
 		},
 		"no mime json":       {"", `{"password":"` + pw + `"}`, []string{pw}, nil},
-		"no mime urlencoded": {"", "password=" + pw + "&page=2", []string{pw}, []string{"page=2"}},
+		"no mime urlencoded": {"", "password=" + pw + "&page=2", []string{pw}, []string{"page="}},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -297,5 +298,102 @@ func TestRedact_RequestBodyNestedEncodings(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// SEC-J2-10: credentials under neutral names. A request body keeps its
+// structure and loses every value, whatever its name.
+func TestRedact_RequestBodyEveryValueRedacted(t *testing.T) {
+	t.Parallel()
+	pw := testsecrets.Canary(t, testsecrets.Password)
+	login := "someone.e2e@login.example"
+	openAM := `{"authId":"x","stage":"DataStore1","callbacks":[` +
+		`{"type":"NameCallback","output":[{"name":"prompt","value":"User Name:"}],"input":[{"name":"IDToken1","value":"` + login + `"}]},` +
+		`{"type":"PasswordCallback","output":[{"name":"prompt","value":"Password:"}],"input":[{"name":"IDToken2","value":"` + pw + `"}]}]}`
+	cases := map[string]struct {
+		mime, body string
+		keep       []string
+	}{
+		"openam callbacks":    {"application/json", openAM, []string{"callbacks", "input"}},
+		"name value pairs":    {"application/json", `{"fields":[{"name":"password","value":"` + pw + `"}]}`, []string{"fields"}},
+		"jsonrpc positional":  {"application/json", `{"jsonrpc":"2.0","method":"auth.login","params":["` + login + `","` + pw + `"],"id":1}`, []string{"jsonrpc", "params"}},
+		"graphql renamed var": {"application/json", `{"query":"mutation($u:String!,$p:String!){login(email:$u,password:$p){ok}}","variables":{"u":"` + login + `","p":"` + pw + `"}}`, []string{"mutation($u:String!", "variables"}},
+		"array pairs":         {"application/json", `[["password","` + pw + `"]]`, nil},
+		"unknown names":       {"application/json", `{"loginEmail":"` + login + `","psw":"` + pw + `","passcode":"` + pw + `"}`, []string{"loginEmail", "psw", "passcode"}},
+		"numbers":             {"application/json", `{"code":98127364,"pin":4821}`, []string{"code"}},
+		"duplicate keys":      {"application/json", `{"password":"` + pw + `","password":"[redacted]"}`, nil},
+		"bracket names":       {"application/x-www-form-urlencoded", "creds%5B1%5D=" + neturl.QueryEscape(pw) + "&creds%5B0%5D=" + neturl.QueryEscape(login), []string{"creds%5B1%5D="}},
+		"graphql escaped":     {"application/json", `{"query":"mutation { login(password: \"a\\\"` + pw + `\") }"}`, []string{"mutation"}},
+		"graphql template":    {"application/json", `{"q":"login(password: ` + "`" + pw + "`" + `)"}`, []string{`"q"`}},
+		"deep nesting":        {"application/json", nestJSON(`{"user":"`+login+`","secret":"`+pw+`"}`, 9), nil},
+		"multipart any part":  {"multipart/form-data; boundary=" + mpBoundary, multipartBody([2]string{"blob", pw}, [2]string{"who", login}), []string{`name="blob"`}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			out, findings := recordPipeline(t, postEntry(tc.mime, tc.body))
+			for _, s := range []string{pw, login, neturl.QueryEscape(pw), neturl.QueryEscape(login), "98127364", "4821"} {
+				if strings.Contains(out, s) {
+					t.Errorf("recorded file still holds a value (%d bytes)", len(s))
+				}
+			}
+			if len(findings) == 0 {
+				t.Errorf("Check on the raw entry found nothing")
+			}
+			for _, k := range tc.keep {
+				if !strings.Contains(out, k) && !strings.Contains(out, jsonText(k)) {
+					t.Errorf("structure %q lost", k)
+				}
+			}
+		})
+	}
+}
+
+// nestJSON wraps s as a JSON string value n times: {"d":"{\"d\":…}"}.
+func nestJSON(s string, n int) string {
+	for range n {
+		b, _ := json.Marshal(s)
+		s = `{"d":` + string(b) + `}`
+	}
+	return s
+}
+
+// TestRedact_OpenAMValueTaintedFileWide: the OpenAM credential, echoed in
+// a response, is scrubbed there too (name/value pair taint).
+func TestRedact_OpenAMValueTaintedFileWide(t *testing.T) {
+	t.Parallel()
+	pw := testsecrets.Canary(t, testsecrets.Password)
+	e := postEntry("application/json", `{"callbacks":[{"input":[{"name":"IDToken2","value":"`+pw+`"}]}]}`)
+	e.Response.Content.Text = "<p>debug " + pw + "</p>"
+	if out, _ := recordPipeline(t, e); strings.Contains(out, pw) {
+		t.Fatal("OpenAM credential echoed in a response survived the scrub")
+	}
+}
+
+// TestRedact_ParamsEveryValueRedacted (SEC-J2-11): postData.params is not
+// a second, weaker path: every value is redacted, and a name that is not a
+// field name (a JSON body posted as urlencoded) is too.
+func TestRedact_ParamsEveryValueRedacted(t *testing.T) {
+	t.Parallel()
+	e := postEntry("application/x-www-form-urlencoded", "")
+	e.Request.PostData.Params = []har.NV{
+		{Name: "pin", Value: "4821"},
+		{Name: "comment", Value: "soleil"},
+		{Name: `{"username":"x","secret":"soleil"}`, Value: ""},
+		{Name: "empty", Value: ""},
+	}
+	r := har.RedactEntry(e)
+	for _, p := range r.Request.PostData.Params {
+		if strings.Contains(p.Name+p.Value, "soleil") || strings.Contains(p.Value, "4821") {
+			t.Errorf("param kept a value: %+v", p)
+		}
+	}
+	if got := r.Request.PostData.Params; got[0].Name != "pin" || got[3].Value != "" {
+		t.Errorf("params = %+v, want names kept and empty values empty", got)
+	}
+	raw := har.New("facto", "t")
+	raw.Log.Entries = []har.Entry{e}
+	if len(har.Check(raw)) == 0 {
+		t.Error("Check found nothing in unredacted params")
 	}
 }
