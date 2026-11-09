@@ -464,7 +464,8 @@ This is not legal advice.
   `scripts/fixtures/scan.sh`. If a page stays empty, list the blocked hosts
   (`ERR_BLOCKED_BY_CLIENT` entries in the file): a supplier host goes in
   `--allow`, an app bundle on shared storage in `--allow-static
-  https://<host>/<prefix>/` (GET under that path only). It records the login page and its frames only:
+  https://<host>/<prefix>/` (facto downloads files under that path itself;
+  the browser never reaches the host). It records the login page and its frames only:
   requests made by service workers, workers or pop-ups are not in the file.
 - **No per-provider kind.** A file identified only by its subfolder is filed as
   `invoice`. Rename it to a compliant name to choose another kind.
