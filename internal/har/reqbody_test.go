@@ -527,3 +527,53 @@ func TestRedact_GraphQLEnumArgumentsRedacted(t *testing.T) {
 		}
 	}
 }
+
+// SEC-J2-17: random tokens used as names, letter-led so the
+// identifier-shape rule alone does not reject them, are redacted; field
+// names made of words are kept.
+func TestDataLikeNames(t *testing.T) {
+	t.Parallel()
+	data := []string{
+		"f47ac10b-58cc-4372-a567-0e02b2c3d479", // UUID, letter-led
+		"abcdefab-cdef-4abc-abcd-abcdefabcdef", // UUID with one digit run
+		"F47AC10B58CC4372A5670E02B2C3D479",     // upper-case hex
+		"deadbeefcafe1234",                     // 16-char hex, letter-led
+		"kXpQzRmWtYvLsNbHjGfDcA",               // base64url, no digit
+		"h1n3uv7qkt0b9gd2sl5rjm8e4a",           // PHP session id shape
+		"Zq7Canary91xPw",                       // mixed case, digits
+		"abcdefghijklmnopqrstuvwxyzabcdefghij", // long lowercase run
+	}
+	for _, s := range data {
+		if !har.DataLikeName(s) {
+			t.Errorf("DataLikeName(%q) = false, want true", s)
+		}
+	}
+	fields := []string{
+		"username", "user[email]", "remember_me", "csrf_token", "IDToken2", "address2Line",
+		"utf8", "customerNotificationPreferences", "x-csrf-token", "authenticity_token",
+		"startUrl", "g-recaptcha-response", "aura.context", "deliveryAddressLine1", "@type",
+		"__VIEWSTATEGENERATOR", "ctl00_MainContent_txtUser",
+	}
+	for _, s := range fields {
+		if har.DataLikeName(s) {
+			t.Errorf("DataLikeName(%q) = true, want false (a field name)", s)
+		}
+	}
+}
+
+// TestRedact_LetterLedTokenNames: the same shapes as JSON keys and form
+// names go through the record pipeline redacted.
+func TestRedact_LetterLedTokenNames(t *testing.T) {
+	t.Parallel()
+	for _, tok := range []string{"f47ac10b-58cc-4372-a567-0e02b2c3d479", "F47AC10B58CC4372A5670E02B2C3D479", "deadbeefcafe1234", "kXpQzRmWtYvLsNbHjGfDcA", "h1n3uv7qkt0b9gd2sl5rjm8e4a"} {
+		for _, body := range [][2]string{
+			{"application/json", `{"` + tok + `":true}`},
+			{"application/x-www-form-urlencoded", "username=x&" + tok + "=1"},
+		} {
+			out, _ := recordPipeline(t, postEntry(body[0], body[1]))
+			if strings.Contains(out, tok) {
+				t.Errorf("token name %q kept in a %s body", tok, body[0])
+			}
+		}
+	}
+}

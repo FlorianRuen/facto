@@ -29,10 +29,15 @@ func fieldName(name string) bool {
 	return fieldNameRE.MatchString(name) && !dataLike(name)
 }
 
-// dataLike reports a random-looking token: 8 characters or more mixing
-// upper and lower case letters with at least two digits (base64, a
-// generated secret). Field names have at most one digit in practice
-// (IDToken2, address2Line).
+// dataLike reports a random-looking token. A field name is made of words
+// (camelCase or separated parts, a digit run here and there: IDToken2,
+// ctl00_MainContent, iso8601Date); a generated token is not:
+//   - hex of 16+ characters or a UUID (CSRF field names, hashes);
+//   - a lowercase run of 32+ characters with no separator;
+//   - several digit runs between letters: mixed case with 2+
+//     (Zq7Canary91xPw), any case with 3+ in 12+ characters (session ids);
+//   - case flipping on most letters (base64url: kXpQzRmWtYvLsNbH…),
+//     where camelCase flips once per word.
 func dataLike(s string) bool {
 	if len(s) < 8 {
 		return false
@@ -46,18 +51,40 @@ func dataLike(s string) bool {
 	if len(s) >= 32 && !strings.ContainsAny(s, "_.-[]:ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
 		return true
 	}
-	upper, lower, digits := 0, 0, 0
+	upper, lower, digitRuns, flips := 0, 0, 0, 0
+	prevDigit, prevCase := false, byte(0) // prevCase: 'u', 'l' or 0
 	for i := range len(s) {
-		switch c := s[i]; {
+		c := s[i]
+		isDigit := c >= '0' && c <= '9'
+		if isDigit && !prevDigit {
+			digitRuns++
+		}
+		prevDigit = isDigit
+		var cs byte
+		switch {
 		case c >= 'A' && c <= 'Z':
 			upper++
+			cs = 'u'
 		case c >= 'a' && c <= 'z':
 			lower++
-		case c >= '0' && c <= '9':
-			digits++
+			cs = 'l'
+		default:
+			continue
 		}
+		if prevCase != 0 && cs != prevCase {
+			flips++
+		}
+		prevCase = cs
 	}
-	return upper > 0 && lower > 0 && digits >= 2
+	switch {
+	case upper > 0 && lower > 0 && digitRuns >= 2:
+		return true
+	case len(s) >= 12 && digitRuns >= 3:
+		return true
+	case flips >= 8 && flips*3 >= upper+lower:
+		return true
+	}
+	return false
 }
 
 // hexTokenRE is 16+ hex digits mixing digits and letters; uuidRE a UUID.
