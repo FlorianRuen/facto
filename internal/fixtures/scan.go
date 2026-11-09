@@ -47,6 +47,11 @@ var (
 	jsonFieldRE       = regexp.MustCompile(`"([A-Za-z0-9_.\[\]-]{2,64})"\s*:\s*"([^"]*)"`)
 	jsonNumberFieldRE = regexp.MustCompile(`"([A-Za-z0-9_.-]{2,64})"\s*:\s*(-?\d+(?:\.\d+)?)`)
 	formFieldRE       = regexp.MustCompile(`(?:^|[?&\s])([A-Za-z0-9_.\[\]%-]{2,64})=([^&\s"'<>]*)`)
+	// multipartFieldRE is a multipart/form-data part: its name, then (past
+	// its header lines and the blank line) its value; raw or JSON-escaped
+	// (flow.json keeps request bodies as JSON strings). It spans lines,
+	// so it runs on the whole text (SEC-J2-3).
+	multipartFieldRE = regexp.MustCompile(`(?is)form-data;\s*name=\\?"([^"\\]{1,64})\\?".{0,300}?(?:\\r\\n\\r\\n|\\n\\n|\r\n\r\n|\n\n)((?:[^\r\n\\]|\\[^rn])*)`)
 )
 
 // syntheticEmailDomains are reserved for examples (RFC 2606, RFC 6761).
@@ -58,6 +63,12 @@ func ScanText(file, text string) []Finding {
 	for i, line := range strings.Split(text, "\n") {
 		for _, k := range scanLine(line) {
 			out = append(out, Finding{File: file, Line: i + 1, Kind: k})
+		}
+	}
+	for _, m := range multipartFieldRE.FindAllStringSubmatchIndex(text, -1) {
+		name, value := text[m[2]:m[3]], text[m[4]:m[5]]
+		if har.SecretField(name) && !placeholder(value) {
+			out = append(out, Finding{File: file, Line: strings.Count(text[:m[0]], "\n") + 1, Kind: "secret-field"})
 		}
 	}
 	return out
@@ -111,7 +122,13 @@ func scanLine(line string) []string {
 			add("token")
 		}
 	}
-	for _, m := range jsonFieldRE.FindAllStringSubmatch(line, -1) {
+	jsonLine := line
+	if strings.Contains(line, `\"`) {
+		// A JSON body kept as a JSON string (flow.json): scan it unescaped
+		// too (SEC-J2-8).
+		jsonLine += "\n" + strings.ReplaceAll(line, `\"`, `"`)
+	}
+	for _, m := range jsonFieldRE.FindAllStringSubmatch(jsonLine, -1) {
 		if har.SecretField(m[1]) && !placeholder(m[2]) {
 			add("secret-field")
 		}

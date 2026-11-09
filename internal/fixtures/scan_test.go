@@ -100,3 +100,43 @@ func TestScan_FindingsCarryFileAndLine(t *testing.T) {
 		t.Fatalf("String() = %q, want place without the value", s)
 	}
 }
+
+// TestScan_MultipartSecretParts (SEC-J2-3): a multipart/form-data part
+// named like a secret is a finding, raw or JSON-escaped (flow.json keeps
+// request bodies as JSON strings); a redacted part is not.
+func TestScan_MultipartSecretParts(t *testing.T) {
+	t.Parallel()
+	for name, in := range map[string]string{
+		"raw":                "Content-Disposition: form-data; name=\"user[password]\"\r\n\r\nhunter2-real\r\n",
+		"raw lf":             "Content-Disposition: form-data; name=\"password\"\n\nhunter2-real\n",
+		"json":               `"text": "--b\r\nContent-Disposition: form-data; name=\"password\"\r\n\r\nhunter2-real\r\n--b--"`,
+		"json escaped start": `"text": "Content-Disposition: form-data; name=\"password\"\r\n\r\n\"quoted-pw\r\n"`,
+		"json csrf":          `"text": "Content-Disposition: form-data; name=\"authenticity_token\"\r\n\r\nZx81jAq0aa\r\n"`,
+	} {
+		if got := kinds(fixtures.ScanText("flow.json", in)); !slices.Contains(got, "secret-field") {
+			t.Errorf("%s: kinds = %q, want secret-field", name, got)
+		}
+	}
+	for name, in := range map[string]string{
+		"redacted": `"text": "Content-Disposition: form-data; name=\"password\"\r\n\r\n[redacted]\r\n"`,
+		"harmless": `"text": "Content-Disposition: form-data; name=\"commit\"\r\n\r\nSign in\r\n"`,
+	} {
+		if got := kinds(fixtures.ScanText("flow.json", in)); slices.Contains(got, "secret-field") {
+			t.Errorf("%s: kinds = %q, want no secret-field", name, got)
+		}
+	}
+}
+
+// TestScan_EscapedJSONSecretField (SEC-J2-8): a JSON request body kept as a
+// JSON string in flow.json is scanned too.
+func TestScan_EscapedJSONSecretField(t *testing.T) {
+	t.Parallel()
+	in := `"text": "{\"username\":\"x\",\"password\":\"hunter2-real\"}"`
+	if got := kinds(fixtures.ScanText("flow.json", in)); !slices.Contains(got, "secret-field") {
+		t.Fatalf("kinds = %q, want secret-field", got)
+	}
+	ok := `"text": "{\"username\":\"[redacted]\",\"password\":\"[redacted]\"}"`
+	if got := kinds(fixtures.ScanText("flow.json", ok)); slices.Contains(got, "secret-field") {
+		t.Fatalf("redacted escaped JSON flagged: %q", got)
+	}
+}
