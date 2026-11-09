@@ -227,7 +227,10 @@ func (r *reqRedactor) pairs(q string) string {
 		if err != nil {
 			name = k
 		}
-		if !fieldName(name) {
+		// A lone name with no value, or one followed by base64 "=" padding
+		// only, is a token (a raw base64 body), not a field (SEC-J2-15).
+		loneToken := (len(parts) == 1 && v == "") || (v != "" && strings.TrimRight(v, "=") == "")
+		if !fieldName(name) || loneToken {
 			// Data in a name (a raw base64 body reads as one name with an
 			// empty value): redacted like a value (SEC-J2-13).
 			r.taint(name)

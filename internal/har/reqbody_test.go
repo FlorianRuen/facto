@@ -470,3 +470,60 @@ func TestRedact_FieldNamesAndDocumentsKept(t *testing.T) {
 		}
 	}
 }
+
+// SEC-J2-15: data-shaped names the first rule missed: short base64 of a
+// "user:secret" pair, lowercase hex tokens (Joomla CSRF field names),
+// UUID keys, a lone token posted with an empty value.
+func TestRedact_RequestBodyDataShapedNames(t *testing.T) {
+	t.Parallel()
+	hexTok := "9f86d081884c7d659a2feaa0c55ad015"
+	uuid := "3f2504e0-4f89-11d3-9a0c-0305e82c3301"
+	cases := []struct{ name, mime, body, data string }{
+		{"short b64 mixed", "text/plain", "bWFydGluOkJvbmpvdXI=", "bWFydGluOkJvbmpvdXI"},
+		{"short b64 lower", "", "Ym9iOnNvbGVpbA==", "Ym9iOnNvbGVpbA"},
+		{"lone token no padding", "application/x-www-form-urlencoded", "bobsoleil", "bobsoleil"},
+		{"lone token empty value", "application/x-www-form-urlencoded", "bobsoleil=", "bobsoleil"},
+		{"hex csrf field name", "application/x-www-form-urlencoded", "username=x&" + hexTok + "=1", hexTok},
+		{"hex json key", "application/json", `{"` + hexTok + `":true}`, hexTok},
+		{"uuid json key", "application/json", `{"` + uuid + `":{"a":1}}`, uuid},
+		{"long unbroken key", "application/json", `{"abcdefghijklmnopqrstuvwxyzabcdefghij":1}`, "abcdefghijklmnopqrstuvwxyzabcdefghij"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out, findings := recordPipeline(t, postEntry(tc.mime, tc.body))
+			if strings.Contains(out, tc.data) {
+				t.Errorf("recorded file still holds the data-shaped name (%d bytes)", len(tc.data))
+			}
+			if len(findings) == 0 {
+				t.Errorf("Check on the raw entry found nothing")
+			}
+		})
+	}
+	// Ordinary names stay, a lone ordinary field among others too.
+	out, _ := recordPipeline(t, postEntry("application/x-www-form-urlencoded", "remember_me=&user_id=7&csrf_token=abc"))
+	for _, k := range []string{"remember_me=", "user_id=", "csrf_token="} {
+		if !strings.Contains(out, k) {
+			t.Errorf("field name %q lost", k)
+		}
+	}
+}
+
+// SEC-J2-16: enum argument values are redacted on their own (not only
+// when the random-looking-name check rejects the document), and the
+// document is kept.
+func TestRedact_GraphQLEnumArgumentsRedacted(t *testing.T) {
+	t.Parallel()
+	body := `{"query":"mutation { login(user: alice, pin: SOLEIL, kind: CUSTOMER, remember: true) { ok } }"}`
+	out, _ := recordPipeline(t, postEntry("application/json", body))
+	for _, v := range []string{"alice", "SOLEIL", "CUSTOMER"} {
+		if strings.Contains(out, v) {
+			t.Errorf("enum argument %q kept", v)
+		}
+	}
+	for _, k := range []string{"mutation { login(user: [redacted], pin: [redacted], kind: [redacted], remember: true) { ok } }"} {
+		if !strings.Contains(out, k) {
+			t.Errorf("document %q not kept with its enum values redacted:\n%s", k, out)
+		}
+	}
+}

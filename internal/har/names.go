@@ -37,6 +37,15 @@ func dataLike(s string) bool {
 	if len(s) < 8 {
 		return false
 	}
+	// Hex tokens (CSRF field names, hashes) and UUIDs (SEC-J2-15).
+	if (len(s) >= 16 && hexTokenRE.MatchString(s)) || uuidRE.MatchString(s) {
+		return true
+	}
+	// A long lowercase run with no separator is not a field name
+	// (camelCase names keep an upper-case letter).
+	if len(s) >= 32 && !strings.ContainsAny(s, "_.-[]:ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
+		return true
+	}
 	upper, lower, digits := 0, 0, 0
 	for i := range len(s) {
 		switch c := s[i]; {
@@ -50,6 +59,12 @@ func dataLike(s string) bool {
 	}
 	return upper > 0 && lower > 0 && digits >= 2
 }
+
+// hexTokenRE is 16+ hex digits mixing digits and letters; uuidRE a UUID.
+var (
+	hexTokenRE = regexp.MustCompile(`^(?i)(?:[0-9a-f]*[0-9][0-9a-f]*[a-f][0-9a-f]*|[0-9a-f]*[a-f][0-9a-f]*[0-9][0-9a-f]*)$`)
+	uuidRE     = regexp.MustCompile(`^(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+)
 
 // gqlNumberRE is a GraphQL-ish number token not glued to a name: sign,
 // leading dot, hex or underscore forms included (redacted whole).
