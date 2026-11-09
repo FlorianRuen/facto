@@ -92,6 +92,7 @@ var e2eOnlySymbols = []string{
 	"internal/browser.CheckFlagsE2E",
 	"internal/browser.PoolE2E",
 	"internal/httpx.NewLoopback",
+	"internal/httpx.NewPinnedLoopback",
 }
 
 // selfTestFuncs are the e2e-only functions cmd/facto calls in a -tags e2e
@@ -101,6 +102,7 @@ var selfTestFuncs = []string{
 	"internal/browser.WithE2E",
 	"internal/browser.CheckFlagsE2E",
 	"internal/httpx.NewLoopback",
+	"internal/httpx.NewPinnedLoopback",
 }
 
 // releaseBuild is builds[id=facto] of .goreleaser.yaml.

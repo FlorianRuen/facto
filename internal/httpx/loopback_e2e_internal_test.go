@@ -38,7 +38,7 @@ func TestLoopbackDial_RefusesAtDialLevel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dial := loopbackDial(allow, target)
+	dial := loopbackDial(allow.Allows, target)
 	refused := []struct{ name, network, addr string }{
 		{"off-allowlist host", "tcp", "evil.test:443"},
 		{"allowlist parent of wildcard", "tcp", "cdn.supplier.example:443"},

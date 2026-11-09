@@ -39,12 +39,6 @@ func FlagsE2E(opts Options, o E2EOverrides) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	static, err := ParseStatic(opts.Static)
-	if err != nil {
-		return nil, err
-	}
-	// Static hosts (J2) are mapped like exact allowed domains.
-	domains = append(domains, static.Hosts()...)
 	if o.LoopbackPort < 0 || o.LoopbackPort > 65535 {
 		return nil, fmt.Errorf("%w: loopback port %d out of range", ErrForbiddenFlag, o.LoopbackPort)
 	}
@@ -112,11 +106,6 @@ func WithE2E(cfg PoolConfig, e PoolE2E) (PoolConfig, error) {
 			if !strings.HasPrefix(d, "*.") {
 				hosts = append(hosts, strings.ToLower(d))
 			}
-		}
-		// Static hosts (J2) resolve to the fake site too; an invalid list is
-		// refused by FlagsE2E itself.
-		if s, err := ParseStatic(opts.Static); err == nil {
-			hosts = append(hosts, s.Hosts()...)
 		}
 		slices.Sort(hosts)
 		return E2EOverrides{LoopbackHosts: slices.Compact(hosts), LoopbackPort: e.LoopbackPort, TestCASPKI: spki}

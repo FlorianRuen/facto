@@ -94,16 +94,15 @@ func Flags(opts Options) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	static, err := ParseStatic(opts.Static)
-	if err != nil {
+	// Static hosts are validated but never resolvable (SEC-J2-1): facto
+	// downloads their allowed paths itself (static.go).
+	if _, err := ParseStatic(opts.Static); err != nil {
 		return nil, err
 	}
-	resolvable := slices.Concat(domains, static.Hosts())
-	slices.Sort(resolvable)
 	args := slices.Clone(baseFlags)
 	args = append(args,
 		"--user-data-dir="+opts.ProfileDir,
-		"--host-resolver-rules="+resolverRules(nil, slices.Compact(resolvable)),
+		"--host-resolver-rules="+resolverRules(nil, domains),
 	)
 	if !opts.Visible {
 		args = append(args, "--headless=new")

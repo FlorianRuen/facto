@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/FlorianRuen/facto/internal/browser"
+	"github.com/FlorianRuen/facto/internal/browser/staticfetch"
 	"github.com/FlorianRuen/facto/internal/fsx"
 	"github.com/FlorianRuen/facto/internal/httpx"
 )
@@ -96,6 +97,14 @@ func e2eRunHooks(e env) (runHooks, error) {
 		out, err := browser.WithE2E(cfg, pe)
 		if err != nil {
 			return browser.PoolConfig{}, fmt.Errorf("e2e pool: %w", err)
+		}
+		// Static downloads reach the fake site, still pinned per entry.
+		out.StaticClients = func(host, prefix string) (browser.StaticGet, error) {
+			c, err := httpx.NewPinnedLoopback(host, prefix, target, roots, httpx.Options{NoCookies: true})
+			if err != nil {
+				return nil, fmt.Errorf("e2e static client: %w", err)
+			}
+			return staticfetch.FromClient(c), nil
 		}
 		return out, nil
 	}

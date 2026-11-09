@@ -46,7 +46,7 @@ linters:
         # (renamed and dot imports, build-tagged files). Proven live by make
         # lint-selftest.
         - pattern: '^httpx\.NewPinned$'
-          msg: "httpx.NewPinned is reserved to internal/browser/cft (ADR 0008, Chrome for Testing download)"
+          msg: "httpx.NewPinned is reserved to internal/browser/cft and internal/browser/staticfetch (ADR 0008: Chrome for Testing download, static allowlist)"
     depguard:
       rules:
         main:
@@ -113,6 +113,9 @@ linters:
       - path: '^(internal/fsx/|internal/httpx/|internal/clock/)'
         linters: [forbidigo]
       - path: '^internal/browser/cft/'
+        linters: [forbidigo]
+        text: 'httpx.NewPinned is reserved'
+      - path: '^internal/browser/staticfetch/'
         linters: [forbidigo]
         text: 'httpx.NewPinned is reserved'
       # cmd/ is the CLI: it prints to stdout/stderr. Every other forbidigo

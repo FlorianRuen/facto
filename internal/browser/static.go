@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -16,17 +17,46 @@ import (
 // refuses as a whole host, on purpose: anyone can publish there. A static
 // entry "https://<host>/<prefix>/" lets the login page, its frames and
 // workers GET or HEAD that exact host under that path prefix, and nothing
-// more:
+// more.
+//
+// Chrome itself never reaches a static host (SEC-J2-1): the host stays
+// ~NOTFOUND in --host-resolver-rules like any other name. Fetch pauses a
+// request before name resolution; an allowed one is downloaded on facto's
+// side, through the entry's StaticGet (httpx.NewPinned: exact host, path
+// prefix on every redirect hop, internal/browser/staticfetch), and handed
+// to Chrome with Fetch.fulfillRequest. So:
 //   - no other path of the host, no other method (no POST: nothing typed
-//     on the page can be sent there), no WebSocket;
+//     on the page can be sent there), and no WebSocket, which Fetch never
+//     sees but which cannot resolve the host either;
 //   - never a document (Navigate refuses it; a top-level or frame document
 //     load is blocked), so no page of the shared host runs as the login
 //     page or receives a typed secret;
+//   - only a few request headers are forwarded (staticRequestHeaders: no
+//     cookie, no authorization, nothing the page chose freely) and a few
+//     response headers handed back (staticResponseHeaders: no Set-Cookie);
 //   - cookies of the host are never exported (Cookies keeps the domain
-//     allowlist), and httpx never sees static entries: connectors' HTTP
-//     clients stay on AllowedDomains.
-// The host is added to the --host-resolver-rules exclusions (paths are
-// never put in flags).
+//     allowlist), and connectors' HTTP clients stay on AllowedDomains.
+
+// StaticResponse is a facto-side download handed to Chrome for a paused
+// static request.
+type StaticResponse struct {
+	Status int
+	Header map[string][]string
+	Body   []byte
+}
+
+// StaticGet downloads rawURL with method GET or HEAD and the given request
+// headers, on facto's side. It fails on a body over MaxStaticBody.
+type StaticGet func(ctx context.Context, method, rawURL string, header map[string][]string) (StaticResponse, error)
+
+// StaticClients builds the StaticGet of one static entry: host is a
+// lowercase host name, prefix an escaped path ending in "/". In production
+// it is internal/browser/staticfetch.Pinned (httpx.NewPinned).
+type StaticClients func(host, prefix string) (StaticGet, error)
+
+// MaxStaticBody caps one facto-side static download: its base64 form must
+// fit one CDP message (MaxMessageBytes).
+const MaxStaticBody = 8 << 20
 
 // ErrInvalidStatic reports a static entry ParseStatic refuses.
 var ErrInvalidStatic = errors.New("browser: invalid static allowlist entry")
@@ -122,36 +152,59 @@ func (s Static) Hosts() []string {
 // readMethods are the only methods a static entry allows.
 var readMethods = []string{"GET", "HEAD"}
 
-// allows reports whether a subresource request may go to a static entry:
+// match returns the index of the entry raw may go to, or -1:
 // https, method GET or HEAD, no userinfo, port 443 (or none), host equal
-// to an entry's, and an escaped path under its prefix that no decoding
-// can move out of it (no "..", "." segments, no escaped "/", "\" or ".").
-func (s Static) allows(raw, method string) bool {
+// to an entry's, and a path under its prefix with no percent-encoding and
+// no empty, "." or ".." segment (what the pinned client accepts).
+func (s Static) match(raw, method string) int {
 	if len(s.entries) == 0 || !slices.Contains(readMethods, method) || hasUnsafeChar(raw) {
-		return false
+		return -1
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "https" || u.User != nil || u.Opaque != "" {
-		return false
+		return -1
 	}
 	if port := u.Port(); (port != "" && port != defaultHTTPSPort) || strings.HasSuffix(u.Host, ":") {
-		return false
+		return -1
 	}
 	host := strings.ToLower(u.Hostname())
 	p := u.EscapedPath()
-	low := strings.ToLower(p)
-	if strings.Contains(low, "%2f") || strings.Contains(low, "%5c") || strings.Contains(low, "%2e") {
-		return false
+	// Same rule as the pinned client that downloads it (httpx canonical
+	// path): no percent-encoding at all, no empty, "." or ".." segment.
+	if strings.Contains(p, "%") || strings.Contains(p, "//") {
+		return -1
 	}
 	for seg := range strings.SplitSeq(p, "/") {
 		if seg == "." || seg == ".." {
-			return false
+			return -1
 		}
 	}
-	for _, e := range s.entries {
+	for i, e := range s.entries {
 		if host == e.host && strings.HasPrefix(p, e.prefix) {
-			return true
+			return i
 		}
 	}
-	return false
+	return -1
+}
+
+// staticGets builds one StaticGet per entry of s.
+func staticGets(s Static, clients StaticClients) ([]StaticGet, error) {
+	if len(s.entries) == 0 {
+		return nil, nil
+	}
+	if clients == nil {
+		return nil, fmt.Errorf("%w: no facto-side static client", ErrInvalidStatic)
+	}
+	out := make([]StaticGet, 0, len(s.entries))
+	for _, e := range s.entries {
+		g, err := clients(e.host, e.prefix)
+		if err != nil {
+			return nil, fmt.Errorf("%w: static client: %w", ErrInvalidStatic, err)
+		}
+		if g == nil {
+			return nil, fmt.Errorf("%w: nil static client", ErrInvalidStatic)
+		}
+		out = append(out, g)
+	}
+	return out, nil
 }

@@ -92,30 +92,23 @@ func TestFlagsE2E_LoopbackPortMapped(t *testing.T) {
 	}
 }
 
-// TestFlagsE2E_StaticHostMappedToLoopback (J2): in an e2e build a static
-// allowlist host is mapped to the fake site like the allowed domains (it
-// would resolve to nothing otherwise), and CheckFlagsE2E accepts it; a
-// loopback host that is neither an allowed domain nor a static host is
-// still refused.
-func TestFlagsE2E_StaticHostMappedToLoopback(t *testing.T) {
+// TestFlagsE2E_StaticHostNeverMapped (SEC-J2-1): in an e2e build too, a
+// static host is not resolvable in Chrome (facto downloads its files, see
+// static.go); asking to map it to the fake site is refused like any host
+// that is not an exact allowed domain.
+func TestFlagsE2E_StaticHostNeverMapped(t *testing.T) {
 	t.Parallel()
 	o := opts("linux")
 	o.Static = []string{"https://static.fakeprovider.test/app/"}
-	ov := browser.E2EOverrides{LoopbackHosts: []string{"static.fakeprovider.test"}, LoopbackPort: 8443}
-	got, err := browser.FlagsE2E(o, ov)
+	got, err := browser.FlagsE2E(o, browser.E2EOverrides{LoopbackPort: 0})
 	if err != nil {
-		t.Fatalf("FlagsE2E with a static host: %v", err)
+		t.Fatalf("FlagsE2E with a static entry: %v", err)
 	}
-	if !slices.ContainsFunc(got, func(a string) bool {
-		return strings.HasPrefix(a, "--host-resolver-rules=") && strings.Contains(a, "MAP static.fakeprovider.test 127.0.0.1:8443")
-	}) {
-		t.Fatalf("static host not mapped: %q", got)
+	if slices.ContainsFunc(got, func(a string) bool { return strings.Contains(a, "static.fakeprovider.test") }) {
+		t.Fatalf("static host reachable in the e2e browser: %q", got)
 	}
-	if err := browser.CheckFlagsE2E("linux", got, ov); err != nil {
-		t.Fatalf("CheckFlagsE2E: %v", err)
-	}
-	o.Static = nil
+	ov := browser.E2EOverrides{LoopbackHosts: []string{"static.fakeprovider.test"}, LoopbackPort: 8443}
 	if _, err := browser.FlagsE2E(o, ov); !errors.Is(err, browser.ErrInvalidDomain) {
-		t.Fatalf("FlagsE2E mapping an unknown host = %v, want ErrInvalidDomain", err)
+		t.Fatalf("FlagsE2E mapping a static host = %v, want ErrInvalidDomain", err)
 	}
 }

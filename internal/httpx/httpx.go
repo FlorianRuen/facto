@@ -81,6 +81,9 @@ type Options struct {
 	// cmd/facto sets Proxy = http.ProxyFromEnvironment only when
 	// FACTO_ALLOW_PROXY=1.
 	Proxy func(*http.Request) (*url.URL, error)
+	// NoCookies disables the cookie jar: no cookie is stored or sent (the
+	// static allowlist downloads, J2 SEC-J2-7). Jar must then be nil.
+	NoCookies bool
 	// DialContext replaces the TCP dialer (tests, resolver pinning). TLS
 	// verification still applies on top of it.
 	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -110,7 +113,11 @@ func New(allowed []string, opts Options) (*Client, error) {
 func newClient(allow Allowlist, p *pin, opts Options) (*Client, error) {
 	var err error
 	jar := opts.Jar
-	if jar == nil {
+	if opts.NoCookies {
+		if jar != nil {
+			return nil, errors.New("httpx: NoCookies with a cookie jar")
+		}
+	} else if jar == nil {
 		// Without a public suffix list the jar is strict per host, which
 		// is enough: the allowlist already bounds where cookies go.
 		jar, err = cookiejar.New(nil)
@@ -175,6 +182,29 @@ func (c *Client) Get(ctx context.Context, rawURL string) (*http.Response, error)
 	if err != nil {
 		// err is a *url.Error embedding rawURL: drop it.
 		return nil, errors.New("httpx: malformed url")
+	}
+	return c.Do(req)
+}
+
+// Send builds a bodiless GET or HEAD request with ctx and header (copied;
+// never echoed in an error) and calls Do. Any other method, a nil ctx or a
+// malformed rawURL is an error that does not echo rawURL; none dials. It
+// lets a package that may not import net/http (internal/browser/staticfetch)
+// forward chosen request headers.
+func (c *Client) Send(ctx context.Context, method, rawURL string, header http.Header) (*http.Response, error) {
+	if ctx == nil {
+		return nil, errNilContext
+	}
+	if method != http.MethodGet && method != http.MethodHead {
+		return nil, errors.New("httpx: Send allows GET and HEAD only")
+	}
+	req, err := http.NewRequestWithContext(ctx, method, rawURL, http.NoBody)
+	if err != nil {
+		return nil, errors.New("httpx: malformed url")
+	}
+	req.Header = header.Clone()
+	if req.Header == nil {
+		req.Header = http.Header{}
 	}
 	return c.Do(req)
 }

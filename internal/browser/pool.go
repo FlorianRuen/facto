@@ -98,6 +98,10 @@ type PoolConfig struct {
 	// cancels the pool context that bounds every browser lifetime. Zero:
 	// defaultCloseGrace.
 	CloseGrace time.Duration
+	// StaticClients builds the facto-side downloads of a launch's static
+	// entries (static.go; staticfetch.Pinned in production). Nil: a launch
+	// with static entries is refused with ErrInvalidStatic.
+	StaticClients StaticClients
 
 	// flags, when non-nil, replaces Flags and CheckFlags for every launch
 	// of the pool. Only the e2e-tagged WithE2E sets it: a release build has
@@ -119,6 +123,7 @@ type Pool struct {
 	interactive bool
 	start       Starter
 	flags       *argvPolicy // nil: Flags and CheckFlags (PoolConfig.flags)
+	static      StaticClients
 
 	mu     sync.Mutex
 	closed bool
@@ -197,6 +202,7 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 		interactive: cfg.Interactive,
 		start:       cfg.Start,
 		flags:       cfg.flags,
+		static:      cfg.StaticClients,
 		leases:      map[*PoolBrowser]struct{}{},
 	}
 	if p.start == nil {
@@ -572,7 +578,7 @@ func (p *Pool) startPage(ctx context.Context, cmd Command, domains, static []str
 	if err != nil {
 		return nil, nil, p.classify(ctx, stderr, fmt.Errorf("%w: %w", ErrLaunchFailed, err))
 	}
-	page, err := NewPage(ctx, proc.Client(), PageOptions{AllowedDomains: domains, Static: static, Log: p.log})
+	page, err := NewPage(ctx, proc.Client(), PageOptions{AllowedDomains: domains, Static: static, StaticClients: p.static, Log: p.log})
 	if err != nil {
 		_ = proc.Close() // kill and reap; the setup error is the one reported
 		return nil, nil, p.classify(ctx, stderr, err)

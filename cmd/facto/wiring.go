@@ -16,9 +16,11 @@ import (
 
 	"github.com/FlorianRuen/facto/internal/browser"
 	"github.com/FlorianRuen/facto/internal/browser/cft"
+	"github.com/FlorianRuen/facto/internal/browser/staticfetch"
 	"github.com/FlorianRuen/facto/internal/config"
 	"github.com/FlorianRuen/facto/internal/connector"
 	"github.com/FlorianRuen/facto/internal/fsx"
+	"github.com/FlorianRuen/facto/internal/httpx"
 	"github.com/FlorianRuen/facto/internal/orchestrator"
 	"github.com/FlorianRuen/facto/internal/secret"
 	"github.com/FlorianRuen/facto/internal/secret/keyring"
@@ -57,6 +59,9 @@ func newBrowserPool(ctx context.Context, e env, p poolParams) (browserPool, erro
 		},
 		StateDir:    p.StateDir,
 		Interactive: p.Interactive,
+		// Static allowlist entries are downloaded on facto's side through
+		// httpx.NewPinned; Chrome never resolves their hosts (SEC-J2-1).
+		StaticClients: staticfetch.Pinned(httpx.Options{}),
 	}
 	if p.Configure != nil {
 		var err error
