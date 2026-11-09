@@ -5,6 +5,9 @@ description: >
   fake site in record mode: the login page fills the canary credentials and
   submits itself (facto automates nothing), the account page loads the
   invoice list with a bearer token minted like a session, then one PDF.
+  The login page also posts the credentials as multipart/form-data
+  (SEC-J2-2): redacted part by part; and as JSON under the urlencoded
+  content type, as jQuery sends it (SEC-J2-6).
   The written HAR is 0600, keeps the flow (login POST, redirect, list, PDF,
   cookie names) and holds no password, login, cookie value, bearer token,
   CSRF value or PDF byte: every canary and every value the site minted is
@@ -43,6 +46,13 @@ expect:
         - '"method": "POST"'
         - "password=%5Bredacted%5D"
         - "username=%5Bredacted%5D"
+        # SEC-J2-2: the multipart/form-data copy of the credentials is
+        # redacted part by part.
+        - "multipart/form-data; boundary="
+        - 'name=\"password\"\r\n\r\n[redacted]'
+        - 'name=\"username\"\r\n\r\n[redacted]'
+        # SEC-J2-6: JSON under the urlencoded content type is redacted too.
+        - '{\"password\":\"[redacted]\",\"username\":\"[redacted]\"}'
         - "/api/invoices?from=2000-01-01"
         - "/api/invoices/FP-2026-0001/pdf"
         - '\"id\":\"FP-2026-0001\"'
@@ -58,6 +68,8 @@ expect:
         - "csrf_token=Z"
   requests:
     - { method: POST, host: www.fakeprovider.test, path: /login, count: 1 }
+    - { method: POST, host: www.fakeprovider.test, path: /login/check, count: 1 }
+    - { method: POST, host: www.fakeprovider.test, path: /login/check-json, count: 1 }
     - { host: www.fakeprovider.test, path: /api/invoices, min: 1 }
     - { host: evil.test, count: 0 }
     # Static allowlist: the app bundle only, never another bucket.

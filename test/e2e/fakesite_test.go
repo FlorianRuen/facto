@@ -431,6 +431,19 @@ func (s *fakeSite) serveWWW(w http.ResponseWriter, r *http.Request) {
 		}
 	case r.URL.Path == "/login" && r.Method == http.MethodPost:
 		s.loginPost(w, r)
+	case r.URL.Path == "/login/check-json" && r.Method == http.MethodPost && s.opts.Mode == ModeRecord:
+		// SEC-J2-6: JSON credentials under the urlencoded content type
+		// (jQuery's $.post(url, JSON.stringify(creds)) default).
+		w.WriteHeader(http.StatusNoContent)
+	case r.URL.Path == "/login/check" && r.Method == http.MethodPost && s.opts.Mode == ModeRecord:
+		// SEC-J2-2: the record login page also posts its credentials as
+		// multipart/form-data (fetch with a FormData), as many SPAs do.
+		r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+		if !strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") || r.PostFormValue("password") == "" {
+			http.Error(w, "not a multipart login", http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	case r.URL.Path == workerPath && r.Method == http.MethodGet:
 		serveWorker(w)
 	case r.URL.Path == "/login/captcha" && r.Method == http.MethodGet:
@@ -906,8 +919,9 @@ var (
 
 	captchaTmpl = template.Must(template.New("captcha").Parse(pageHead + `<div id="captcha">Prove you are human (never automated)</div></body></html>`))
 
-	// recordLoginTmpl (mode record) fills the accepted credentials and
-	// submits the real login form once every off-allowlist attempt settled.
+	// recordLoginTmpl (mode record) fills the accepted credentials, posts
+	// them as multipart/form-data to /login/check (SEC-J2-2), then submits
+	// the real login form once every off-allowlist attempt settled.
 	recordLoginTmpl = template.Must(template.New("record-login").Parse(pageHead + `<form id="login-form" hidden method="post" action="/login">
 <input type="hidden" name="csrf_token" value="{{.CSRF}}">
 <label>Login <input id="username" name="username" autocomplete="off"></label>
@@ -921,7 +935,12 @@ var (
     if (f.hidden) { setTimeout(go, 20); return; }
     document.getElementById("username").value = {{.Login}};
     document.getElementById("password").value = {{.Password}};
-    f.requestSubmit();
+    // SEC-J2-2: the same credentials as multipart/form-data first.
+    // SEC-J2-6: and as JSON under the urlencoded content type (jQuery).
+    var creds = JSON.stringify({username: {{.Login}}, password: {{.Password}}});
+    fetch("/login/check-json", {method: "POST", headers: {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}, body: creds})
+      .finally(function () { return fetch("/login/check", {method: "POST", body: new FormData(f)}); })
+      .finally(function () { f.requestSubmit(); });
   };
   go();
 })();

@@ -96,7 +96,7 @@ func (t *Taint) Collect(e Entry) {
 				t.add(p.Value)
 			}
 		}
-		t.collectBody(pd.MimeType, pd.Text, requestField)
+		t.collectRequestBody(pd.MimeType, pd.Text)
 	}
 	t.collectBody(e.Response.Content.MimeType, e.Response.Content.Text, SecretField)
 	t.collectInline(e.Response.Content.Text)

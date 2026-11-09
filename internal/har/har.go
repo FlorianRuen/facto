@@ -129,6 +129,7 @@ type PostData struct {
 	MimeType string `json:"mimeType"`
 	Text     string `json:"text"`
 	Params   []NV   `json:"params,omitempty"`
+	Comment  string `json:"comment,omitempty"`
 }
 
 // Response is a HAR response.
@@ -280,7 +281,11 @@ func redactRequest(r Request) Request {
 	if r.PostData != nil {
 		pd := *r.PostData
 		pd.Params = redactNVWith(pd.Params, requestField)
-		pd.Text = redactBodyWith(pd.MimeType, pd.Text, requestField)
+		if text, ok := redactRequestBody(pd.MimeType, pd.Text); ok {
+			pd.Text = text
+		} else {
+			pd.Text, pd.Comment = "", droppedBodyComment
+		}
 		out.PostData = &pd
 	}
 	return out
