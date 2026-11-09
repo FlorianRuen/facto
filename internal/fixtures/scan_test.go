@@ -140,3 +140,31 @@ func TestScan_EscapedJSONSecretField(t *testing.T) {
 		t.Fatalf("redacted escaped JSON flagged: %q", got)
 	}
 }
+
+// TestScan_NeutralNamePairsAndDeepEscapes (SEC-J2-10, SEC-J2-12): a
+// credential under a name/value pair (OpenAM IDToken), double-escaped
+// JSON, and GraphQL block strings are findings; their redacted forms are
+// not.
+func TestScan_NeutralNamePairsAndDeepEscapes(t *testing.T) {
+	t.Parallel()
+	for name, in := range map[string]string{
+		"openam":        `{"input":[{"name":"IDToken2","value":"hunter2-real"}]}`,
+		"name value":    `{"name":"password","value":"hunter2-real"}`,
+		"value first":   `{"value":"hunter2-real","name":"password"}`,
+		"double escape": `"t": "{\"d\":\"{\\\"password\\\":\\\"hunter2-real\\\"}\"}"`,
+		"block string":  `mutation { login(password: """hunter2-real""") }`,
+	} {
+		if got := kinds(fixtures.ScanText("flow.json", in)); !slices.Contains(got, "secret-field") {
+			t.Errorf("%s: kinds = %q, want secret-field", name, got)
+		}
+	}
+	for name, in := range map[string]string{
+		"openam redacted": `{"input":[{"name":"IDToken2","value":"[redacted]"}]}`,
+		"prompt":          `{"name":"prompt","value":"User Name:"}`,
+		"block redacted":  `mutation { login(password: """[redacted]""") }`,
+	} {
+		if got := kinds(fixtures.ScanText("flow.json", in)); slices.Contains(got, "secret-field") {
+			t.Errorf("%s: kinds = %q, want no secret-field", name, got)
+		}
+	}
+}

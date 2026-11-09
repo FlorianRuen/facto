@@ -46,6 +46,9 @@ var (
 	// secret fields with a value: JSON "name":"value" and form name=value.
 	jsonFieldRE       = regexp.MustCompile(`"([A-Za-z0-9_.\[\]-]{2,64})"\s*:\s*"([^"]*)"`)
 	jsonNumberFieldRE = regexp.MustCompile(`"([A-Za-z0-9_.-]{2,64})"\s*:\s*(-?\d+(?:\.\d+)?)`)
+	nameValueRE       = regexp.MustCompile(`"name"\s*:\s*"([^"]{1,64})"\s*,\s*"value"\s*:\s*"([^"]*)"`)
+	valueNameRE       = regexp.MustCompile(`"value"\s*:\s*"([^"]*)"\s*,\s*"name"\s*:\s*"([^"]{1,64})"`)
+	blockArgRE        = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]{0,63})\s*:\s*"""(.*?)"""`)
 	formFieldRE       = regexp.MustCompile(`(?:^|[?&\s])([A-Za-z0-9_.\[\]%-]{2,64})=([^&\s"'<>]*)`)
 	// multipartFieldRE is a multipart/form-data part: its name, then (past
 	// its header lines and the blank line) its value; raw or JSON-escaped
@@ -122,11 +125,31 @@ func scanLine(line string) []string {
 			add("token")
 		}
 	}
+	// A JSON body kept as a JSON string (flow.json), possibly nested:
+	// scan it unescaped too, up to three levels (SEC-J2-8, SEC-J2-12).
 	jsonLine := line
-	if strings.Contains(line, `\"`) {
-		// A JSON body kept as a JSON string (flow.json): scan it unescaped
-		// too (SEC-J2-8).
-		jsonLine += "\n" + strings.ReplaceAll(line, `\"`, `"`)
+	for u := line; strings.Contains(u, `\"`) && strings.Count(jsonLine, "\n") < 3; {
+		u = strings.NewReplacer(`\\`, `\`, `\"`, `"`).Replace(u)
+		jsonLine += "\n" + u
+	}
+	// A credential under a neutral name: {"name":"password","value":…},
+	// OpenAM {"name":"IDToken2","value":…}, either order (SEC-J2-10).
+	for _, re := range []*regexp.Regexp{nameValueRE, valueNameRE} {
+		for _, m := range re.FindAllStringSubmatch(jsonLine, -1) {
+			name, value := m[1], m[2]
+			if re == valueNameRE {
+				name, value = m[2], m[1]
+			}
+			if credentialName(name) && !placeholder(value) {
+				add("secret-field")
+			}
+		}
+	}
+	// GraphQL block strings: password: """…""" (SEC-J2-12).
+	for _, m := range blockArgRE.FindAllStringSubmatch(jsonLine, -1) {
+		if credentialName(m[1]) && !placeholder(m[2]) {
+			add("secret-field")
+		}
 	}
 	for _, m := range jsonFieldRE.FindAllStringSubmatch(jsonLine, -1) {
 		if har.SecretField(m[1]) && !placeholder(m[2]) {
@@ -297,4 +320,14 @@ func personalJSONField(name, value string) string {
 		}
 	}
 	return ""
+}
+
+// idTokenRE is an OpenAM callback input name (IDToken1, IDToken2…).
+var idTokenRE = regexp.MustCompile(`(?i)^IDToken[0-9]+$`)
+
+// credentialName reports a name whose value is a secret: a secret field
+// or an OpenAM IDToken input. Login fields are left out: after
+// sanitize.sh they hold synthetic addresses, which the email rule checks.
+func credentialName(name string) bool {
+	return har.SecretField(name) || idTokenRE.MatchString(name)
 }
