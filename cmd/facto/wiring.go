@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/FlorianRuen/facto/connectors/wecasa"
 	"github.com/FlorianRuen/facto/internal/browser"
 	"github.com/FlorianRuen/facto/internal/browser/cft"
 	"github.com/FlorianRuen/facto/internal/browser/staticfetch"
@@ -348,9 +349,13 @@ func probeKeyBackend(ctx context.Context, e env, stateDir string, interactive bo
 var registerTestConnectors func(r *connector.Registry) error
 
 // availableConnectors returns a new registry of the connectors this build
-// ships: none in a release build, fakeprovider in an e2e build.
+// ships: the supplier connectors in every build, plus fakeprovider in an
+// e2e build.
 func availableConnectors() (*connector.Registry, error) {
 	r := connector.NewRegistry()
+	if err := wecasa.Register(r); err != nil {
+		return nil, fmt.Errorf("register connectors: %w", err)
+	}
 	if registerTestConnectors != nil {
 		if err := registerTestConnectors(r); err != nil {
 			return nil, fmt.Errorf("register test connectors: %w", err)

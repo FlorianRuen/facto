@@ -700,9 +700,10 @@ Design: [ADR 0009](adr/0009-vault-aead.md).
 - **Signals.** `SIGINT` and `SIGTERM` cancel the run. The connector running is
   reported `interrupted`, the report is still written, and the exit code is
   `1`.
-- **No connector in a release build.** A release build ships no supplier
-  connector, so an enabled connector is refused (exit `2`, "connector not
-  available in this version"). `fakeprovider` is registered in e2e builds only.
+- **Shipped connectors.** A release build ships one supplier connector,
+  `wecasa` (beta, J3); any other enabled connector is refused (exit `2`,
+  "connector not available in this version"). `fakeprovider` is registered in
+  e2e builds only.
   `collect` and `login` build one secret resolver (Bitwarden and keyring) after
   the configuration checks and close it on every path.
   `output.gdrive.enabled: true` only logs a warning.

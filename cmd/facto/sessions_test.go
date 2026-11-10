@@ -421,10 +421,11 @@ func TestCollect_EnabledUnknownConnectorStillRefused(t *testing.T) {
 	}
 }
 
-// TestAvailableConnectors_FakeproviderOnlyInE2E: the release build ships
-// no connector yet; the e2e build ships fakeprovider, registered by an
-// e2e-only file (release-e2e-check proves the release binary lacks it).
-func TestAvailableConnectors_FakeproviderOnlyInE2E(t *testing.T) {
+// TestAvailableConnectors_WecasaShippedFakeproviderOnlyInE2E: the release
+// build ships wecasa; the e2e build ships wecasa and fakeprovider, the
+// latter registered by an e2e-only file (release-e2e-check proves the
+// release binary lacks it).
+func TestAvailableConnectors_WecasaShippedFakeproviderOnlyInE2E(t *testing.T) {
 	t.Parallel()
 	reg, err := availableConnectors()
 	if err != nil {
@@ -434,9 +435,9 @@ func TestAvailableConnectors_FakeproviderOnlyInE2E(t *testing.T) {
 	for _, c := range reg.All() {
 		ids = append(ids, c.Info().ID)
 	}
-	want := []string(nil)
+	want := []string{"wecasa"}
 	if e2eBuild {
-		want = []string{"fakeprovider"}
+		want = []string{"fakeprovider", "wecasa"}
 	}
 	if !slices.Equal(ids, want) {
 		t.Fatalf("shipped connectors = %v, want %v (e2e build: %v)", ids, want, e2eBuild)

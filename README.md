@@ -18,9 +18,11 @@ encrypted session storage, and the secret resolver wired into `collect` and
 `login`. They are tested end to end against `fakeprovider`, a synthetic
 supplier that exists in test builds only.
 
-A release build still ships **no supplier connector**. In practice `collect`
-files the PDFs you drop by hand in the `inbox/` folder. Real connectors, Google
-Drive and the mobile receipt capture come in later milestones (J2 to J4).
+A release build ships one supplier connector, `wecasa`, in beta: it is
+tested offline against sanitized recordings only and has not yet been checked
+on a real account. Otherwise `collect` files the PDFs you drop by hand in the
+`inbox/` folder. More connectors, Google Drive and the mobile receipt capture
+come in later milestones (J3 and J4).
 
 ### Connectors
 
@@ -28,6 +30,7 @@ Connector sheets live in [`docs/connectors/`](docs/connectors/).
 
 | Connector | Status |
 | --- | --- |
+| [`wecasa`](docs/connectors/wecasa.md) | beta, offline only: login (password, Cloudflare challenge handed to the user), list and PDF download tested against sanitized fixtures; not yet verified on a real account (`facto doctor wecasa`, H4) |
 | [`fakeprovider`](docs/connectors/fakeprovider.md) (test only, e2e builds) | beta: every login mode (password, TOTP, email OTP, SSO redirect, captcha) and failure mode covered by `make e2e` against a fake site. Not in release builds |
 
 ## Install
@@ -47,7 +50,7 @@ must be on your `PATH`. `facto version` prints
 `facto <version> (<go version> <os>/<arch>)`. A build from source reports the
 version `dev`.
 
-No connector needs a browser yet. When one does, install the pinned browser
+The `wecasa` connector logs in through a browser. Install the pinned browser
 once (Linux x86-64), see [`facto browser install`](#facto-browser-install):
 
 ```sh
@@ -121,7 +124,7 @@ type is an error. The format follows [`docs/spec.md`](docs/spec.md)
 | `sessions` | `persistent` | Yes: `persistent` or `ephemeral`. See [Sessions](#sessions). |
 | `browser.path` | none | Yes, when a connector needs a browser. See [Browser](#facto-browser-install). |
 | `manual` | none | Yes: `id` and `category` of providers you file by hand. `reminder` is checked (`MM-DD`) but no reminder is sent yet. |
-| `connectors` | none | Checked. A release build ships no connector, so any `enabled: true` connector is refused (exit `2`, "connector not available in this version"). |
+| `connectors` | none | Yes. A release build ships `wecasa` (beta). Any other `enabled: true` connector is refused (exit `2`, "connector not available in this version"). |
 | `secrets.default`, `notify` | `bitwarden`, `desktop` | Checked only. Nothing uses them yet. |
 
 Secret fields (`login`, `password`, `otp` under a connector) must be empty or a
@@ -152,7 +155,7 @@ Order of a run:
 5. Open the index (`<state_dir>/index.db`) and the output folder.
 6. Prepare the browser pool, which removes stale browser profiles left by a
    crashed run. Open the session store (see [Sessions](#sessions)).
-7. Run the enabled connectors (none in a release build).
+7. Run the enabled connectors (`wecasa` is the only one a release build ships).
 8. File the `inbox/` content.
 9. Write the report to `<state_dir>/reports/` and print it.
 
@@ -206,7 +209,7 @@ documents.
   not a terminal, it exits `2` before doing anything.
 - The connector must be valid, shipped by this build, and present under
   `connectors:` in `config.yaml`. Otherwise it exits `2`. A release build ships
-  no connector yet, so today it always stops here.
+  one connector, `wecasa` (beta).
 - When the site needs you (captcha, unusual check), a visible browser window
   opens and you finish the login by hand.
 - One-time codes (email or SMS) are asked on the terminal with echo off.
@@ -427,17 +430,21 @@ terms of service forbid automated access.**
   them before you enable a connector.
 - Supplier names are used descriptively. The project ships no logo or trademark.
 
-A release build ships no connector yet: `facto collect` does not contact any
-supplier. It only files the documents you downloaded yourself.
+`facto collect` contacts a supplier only for the connectors you enable, and
+only that connector's own allowed hosts (for `wecasa`: `www.wecasa.fr`, plus
+its app files on `storage.googleapis.com/wecasa-react-prod/` while the login
+browser is open). With no connector enabled, it only files the documents you
+downloaded yourself.
 `facto browser install` contacts the Chrome for Testing download host only.
 
 This is not legal advice.
 
-## Current limitations (J1)
+## Current limitations (J3)
 
-- **No supplier connector.** Release builds ship none. `collect` files the
-  `inbox/` only, an enabled connector in `config.yaml` is a configuration error
-  (exit `2`), and `facto login` has nothing to log in to.
+- **One supplier connector, in beta.** Release builds ship `wecasa` only. It
+  is tested offline against sanitized recordings and has not yet been checked
+  on a real account. Any other enabled connector in `config.yaml` is a
+  configuration error (exit `2`).
 - **Pinned browser on Linux x86-64 only.** On macOS, Windows or Linux arm64,
   set `browser.path` to a Chrome you installed. facto does not verify it.
 - **Windows browser login is weaker.** Windows uses a loopback debug port

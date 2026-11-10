@@ -163,9 +163,9 @@ func TestRun_CollectNoConfigDirExit2(t *testing.T) {
 	}
 }
 
-// TestRun_CollectEnabledConnectorExit2: no supplier connector ships in J0,
-// so an enabled one is a configuration error naming it, before anything is
-// created.
+// TestRun_CollectEnabledConnectorExit2: an enabled connector this build
+// does not ship (ileo) is a configuration error naming it, before anything
+// is created.
 func TestRun_CollectEnabledConnectorExit2(t *testing.T) {
 	t.Parallel()
 	s := newSandbox(t)
