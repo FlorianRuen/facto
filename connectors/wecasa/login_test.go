@@ -45,7 +45,7 @@ const (
 	refPhrase = "keyring://facto/wecasa/password"
 )
 
-const staticPrefix = "https://storage.googleapis.com/wecasa-react-prod/"
+const staticPrefix = "https://storage.googleapis.com/wecasa-react-prod/customer-area/assets/"
 
 type harness struct {
 	t      *testing.T

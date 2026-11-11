@@ -29,7 +29,7 @@ const Host = "www.wecasa.fr"
 
 // staticPrefix is where the customer-area React bundle lives (login
 // browser only, GET only).
-const staticPrefix = "https://storage.googleapis.com/wecasa-react-prod/"
+const staticPrefix = "https://storage.googleapis.com/wecasa-react-prod/customer-area/assets/"
 
 // Caps from the connector sheet, applied when the matching Options field
 // is zero (or negative).

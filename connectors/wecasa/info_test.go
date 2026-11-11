@@ -30,7 +30,7 @@ func TestInfo_MatchesSheet(t *testing.T) {
 	if want := []string{"www.wecasa.fr"}; !slices.Equal(info.AllowedDomains, want) {
 		t.Errorf("AllowedDomains = %q, want %q", info.AllowedDomains, want)
 	}
-	if want := []string{"https://storage.googleapis.com/wecasa-react-prod/"}; !slices.Equal(info.BrowserStatic, want) {
+	if want := []string{"https://storage.googleapis.com/wecasa-react-prod/customer-area/assets/"}; !slices.Equal(info.BrowserStatic, want) {
 		t.Errorf("BrowserStatic = %q, want %q", info.BrowserStatic, want)
 	}
 	if err := connector.ValidateInfo(info); err != nil {
@@ -55,7 +55,7 @@ func TestInfo_FreshSlicesOnEveryCall(t *testing.T) {
 	if b.AllowedDomains[0] != wwwHost {
 		t.Errorf("AllowedDomains shared between calls: %q", b.AllowedDomains)
 	}
-	if b.BrowserStatic[0] != "https://storage.googleapis.com/wecasa-react-prod/" {
+	if b.BrowserStatic[0] != "https://storage.googleapis.com/wecasa-react-prod/customer-area/assets/" {
 		t.Errorf("BrowserStatic shared between calls: %q", b.BrowserStatic)
 	}
 	if b.Kinds[0] != connector.Invoice {

@@ -8,7 +8,7 @@ checkpoint H3, sanitized with the `fixtures-from-har` skill).
 - id: `wecasa`
 - Site / customer portal: `https://www.wecasa.fr/customer-area` (Rails pages)
   and `https://www.wecasa.fr/my-customer-area/...` (a React app whose bundle is
-  served from `storage.googleapis.com/wecasa-react-prod/`).
+  served from `storage.googleapis.com/wecasa-react-prod/customer-area/assets/`).
 - Login: email + password form on `https://www.wecasa.fr/customer-area/login`
   (`#user_email`, `#user_password`, submit `input[name=commit]`, Rails CSRF
   hidden field filled by the page). No 2FA observed. Cloudflare bot checks
@@ -62,7 +62,7 @@ checkpoint H3, sanitized with the `fixtures-from-har` skill).
   `rate_limited`, never retried.
 - Allowed domains: `www.wecasa.fr`.
 - Browser static prefixes (app files on shared storage, GET only):
-  `https://storage.googleapis.com/wecasa-react-prod/`.
+  `https://storage.googleapis.com/wecasa-react-prod/customer-area/assets/`.
 - Not used: `img.wecasa.fr`, `help.wecasa.fr`, `acqui.wecasa.fr`,
   `images.prismic.io`, Intercom, analytics. The browser blocks them; the
   login does not need them.
@@ -84,3 +84,30 @@ checkpoint H3, sanitized with the `fixtures-from-har` skill).
   - pacing. `List` sends one detail request per order back to back. That
     is fine for about one order a month; add clock-injected delays if the
     site rate-limits.
+
+## Sample config (H4 test)
+
+The config file (Linux: under `$XDG_CONFIG_HOME/facto/`, see the README
+"Configuration file"), mode `0600`. Secret fields hold **references**
+only, never values.
+
+```yaml
+output:
+  local: ~/Documents/Invoices
+state_dir: ~/.facto
+naming:
+  language: fr
+sessions: persistent        # the Wecasa session is saved encrypted
+connectors:
+  wecasa:
+    enabled: true
+    category: services
+    login: keyring://facto/wecasa/login
+    password: keyring://facto/wecasa/password
+    # or Bitwarden: bw://<item-uuid>/username and bw://<item-uuid>/password
+```
+
+`keyring://facto/wecasa/login` is the OS keyring entry with service `facto`
+and user `wecasa/login` (Linux Secret Service, macOS Keychain, Windows
+Credential Manager). Then: `facto browser install` (once), `facto login
+wecasa`, `facto collect --year 2025`.

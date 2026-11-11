@@ -432,7 +432,7 @@ terms of service forbid automated access.**
 
 `facto collect` contacts a supplier only for the connectors you enable, and
 only that connector's own allowed hosts (for `wecasa`: `www.wecasa.fr`, plus
-its app files on `storage.googleapis.com/wecasa-react-prod/` while the login
+its app files under `storage.googleapis.com/wecasa-react-prod/customer-area/assets/` while the login
 browser is open). With no connector enabled, it only files the documents you
 downloaded yourself.
 `facto browser install` contacts the Chrome for Testing download host only.
