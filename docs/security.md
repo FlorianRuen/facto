@@ -18,7 +18,7 @@ file or a log, a compromised dependency, a buggy or malicious connector.
 **Out of scope:** an attacker who is already root on the machine; supplier
 websites themselves.
 
-| Threat | Planned mitigation (spec) | State at J2 |
+| Threat | Planned mitigation (spec) | State at J3 |
 | --- | --- | --- |
 | Cookie theft through the automated browser (CDP port) | CDP over a pipe, else random 127.0.0.1 port, short browser life | Linux and macOS: done. CDP over `--remote-debugging-pipe`, no port is opened ([ADR 0008](adr/0008-browser-cdp-pipe.md), `internal/browser`, real-Chrome test `TestChrome_NoListeningSocket`). **Windows: accepted MEDIUM** (A4, SEC-J1-8): `--remote-debugging-port=0` bound to 127.0.0.1, see [Windows debug port](#windows-debug-port-accepted-medium). The browser runs for login only and is closed before `List` (`internal/orchestrator`) |
 | Reading the Chromium profile | Disposable 0700 profile, deleted after login | Done: a fresh 0700 profile per launch under `$XDG_RUNTIME_DIR/facto`, else `<state_dir>/tmp`, removed once the browser has exited. Stale profiles are swept at startup. Chrome's caches and crash database stay in a private per-launch area. Cookies live in an in-memory browser context (`internal/browser`, ADR 0008 "Hardening") |
@@ -26,6 +26,7 @@ websites themselves.
 | Exfiltration from the login page | Domain allowlist monitored in the browser | Done: in-browser allowlist on every target (pages, frames, workers, pop-ups), resolver rules and a WebRTC policy (`internal/browser`, ADR 0008 "Hardening") |
 | Exfiltration through a shared static host (J2) | App bundle on shared storage allowed by exact path prefix only | Done: a static host is never resolvable in Chrome; facto downloads allowed GET/HEAD subresources itself through `httpx.NewPinned` and fulfills them, so no WebSocket or other path of the host is reachable (SEC-J2-1, [Static allowlist](#static-allowlist-and-recordings-j2)) |
 | Credentials in a recording (J2) | `facto record` redacts before writing; raw HARs never committed | Done: headers, cookies, secret fields in URLs; request bodies keep their structure and lose every value whatever its name (JSON, urlencoded, multipart, nested JSON, GraphQL literals); any other request body dropped; values seen in a secret position scrubbed file-wide; `har.Check` must be clean or nothing is written (SEC-J2-2). Files are 0600 and refused in a git work tree or a synced folder |
+| Supplier API token and saved session (J3, `wecasa`) | Secrets typed only into the allowlisted login page; session saved encrypted | Done: the browser only types the login and password (`TypeSecret`) and clicks submit; a Cloudflare challenge or unknown page is never automated (visible window for the user, at most `UserTimeout`, 10 min; `needs_login` when non-interactive). The API bearer token is read over httpx from the `window.wecasa` block of one page into a `secret.Secret` (page buffer cleared, never logged) and exposed only in the `Authorization` header. The saved session (token + `www.wecasa.fr` cookies) is one exact-size validated blob, AEAD-encrypted by `internal/vault`; stale cookies are cleared before a fresh login. Browser static prefix narrowed to `storage.googleapis.com/wecasa-react-prod/customer-area/assets/` (SEC-J3-2). Fuzz targets `FuzzParseToken`, `FuzzRestore_PersistRoundTrip` (SEC-J3-3) |
 | Leak through sync | Refuse a state dir inside the output folder or a synced folder | Done: `internal/config` (ADR 0007, D1, lexical) and `cmd/facto` (output folder and synced folders, symlinks followed, SEC-J0-17); synced-folder detection is name-based, see limitations |
 | Leak in logs, reports, errors | `Secret` type, redaction by key and pattern, no HTTP bodies logged | Done: redacting logger, clean reports, `secret.Secret` (`internal/secret`), config errors never echo values. The browser logs counts and classes only, never a CDP payload or Chrome's stderr |
 | Leak through the command line | No secret in argv; subprocess-only environment | Done in `internal/secret/bitwarden`; no CLI flag takes a secret. `collect` and `login` build one secret resolver and close it (password manager locked) on success, error and `SIGTERM` (SEC-J0-22, narrowed). Chrome gets an allowlisted environment and no secret on argv |
@@ -700,9 +701,10 @@ Design: [ADR 0009](adr/0009-vault-aead.md).
 - **Signals.** `SIGINT` and `SIGTERM` cancel the run. The connector running is
   reported `interrupted`, the report is still written, and the exit code is
   `1`.
-- **No connector in a release build.** A release build ships no supplier
-  connector, so an enabled connector is refused (exit `2`, "connector not
-  available in this version"). `fakeprovider` is registered in e2e builds only.
+- **Shipped connectors.** A release build ships one supplier connector,
+  `wecasa` (beta, J3); any other enabled connector is refused (exit `2`,
+  "connector not available in this version"). `fakeprovider` is registered in
+  e2e builds only.
   `collect` and `login` build one secret resolver (Bitwarden and keyring) after
   the configuration checks and close it on every path.
   `output.gdrive.enabled: true` only logs a warning.

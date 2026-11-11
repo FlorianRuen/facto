@@ -76,7 +76,8 @@
 //	// `make release-e2e-check` must still pass).
 //	var registerTestConnectors func(r *connector.Registry) error
 //	// availableConnectors returns a new registry of the connectors this
-//	// build ships: none in a release build, fakeprovider in an e2e build.
+//	// build ships: wecasa in every build, plus fakeprovider in an e2e
+//	// build.
 //	func availableConnectors() (*connector.Registry, error)
 //
 //	// e2eInteractiveEnv enables stdin prompts in e2e builds (A8).

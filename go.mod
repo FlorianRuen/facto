@@ -1,6 +1,6 @@
 module github.com/FlorianRuen/facto
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/pdfcpu/pdfcpu v0.16.4

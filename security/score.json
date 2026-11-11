@@ -1,8 +1,8 @@
 {
-  "date": "2026-11-09",
-  "milestone": "J2",
-  "commit": "f75119df5d632adbdcc6e7f051759a24a4981e65",
-  "code_tree": "4d39a07e975f0845fecd21c92ce34366299cf49b5394dffbf4205d8697cf0dcd",
+  "date": "2026-11-11",
+  "milestone": "J3",
+  "commit": "4f7ce66f531f4177c1ab92c930bb8ba0cc84ab27",
+  "code_tree": "de7bf411dde5e574c851175f696b938a8d061f4fb5810cc29b88c4cb3d459443",
   "total": 85,
   "categories": [
     {
@@ -566,6 +566,54 @@
       "location": "internal/har/names.go:32-94 (dataLike: hex/UUID, lowercase 32+, digit runs, case flips)",
       "status": "fixed",
       "regression_test": "TestDataLikeNames, TestRedact_LetterLedTokenNames"
+    },
+    {
+      "id": "SEC-J3-1",
+      "category": 8,
+      "severity": "medium",
+      "location": "security/audit/2026-11-06-J2.md:319 (commit 8b4f75a)",
+      "status": "fixed",
+      "regression_test": "make audit gitleaks: fingerprint 8b4f75a…:security/audit/2026-11-06-J2.md:generic-api-key:319 no longer reported (.gitleaksignore), literal shortened at HEAD"
+    },
+    {
+      "id": "SEC-J3-2",
+      "category": 5,
+      "severity": "low",
+      "location": "connectors/wecasa/wecasa.go:32",
+      "status": "fixed",
+      "regression_test": "TestInfo_MatchesSheet, TestInfo_FreshSlicesOnEveryCall"
+    },
+    {
+      "id": "SEC-J3-3",
+      "category": 7,
+      "severity": "low",
+      "location": "connectors/wecasa/parse.go:33, connectors/wecasa/session.go:261",
+      "status": "fixed",
+      "regression_test": "FuzzParseToken, FuzzRestore_PersistRoundTrip"
+    },
+    {
+      "id": "SEC-J3-4",
+      "category": 10,
+      "severity": "low",
+      "location": "docs/security.md:21-37",
+      "status": "fixed",
+      "regression_test": "auditor review per milestone (docs/security.md \"State at J3\", wecasa row)"
+    },
+    {
+      "id": "SEC-J3-5",
+      "category": 8,
+      "severity": "medium",
+      "location": "connectors/wecasa/fuzz_test.go (seeds, amended commit 4f7ce66)",
+      "status": "fixed",
+      "regression_test": "make audit gitleaks gate (security/scanners.json gitleaks), .github/workflows/security.yml gitleaks step; FuzzParseToken, FuzzRestore_PersistRoundTrip seeds from const seedTok"
+    },
+    {
+      "id": "SEC-J3-6",
+      "category": 8,
+      "severity": "medium",
+      "location": "go.mod:3 (go 1.27.3, GO-2026-6859 net/http)",
+      "status": "fixed",
+      "regression_test": "make audit govulncheck gate (security/scanners.json govulncheck), .github/workflows/security.yml govulncheck (go-version-file: go.mod)"
     }
   ],
   "scanners": {

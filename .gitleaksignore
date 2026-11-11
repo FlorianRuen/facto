@@ -28,3 +28,6 @@ f2d1e38908b417bb89b1245088a8e1eedfb28335:test/e2e/fakesite_unit_test.go:generic-
 c93a9915387c86cdc9d1e14ebd3c118a36bb502c:internal/har/har_test.go:jwt:173
 55f098d6d3c5dfa202203c60ff7125033e115cdb:internal/fixtures/scan_test.go:jwt:35
 55f098d6d3c5dfa202203c60ff7125033e115cdb:scripts/fixtures/sanitize/main.go:generic-api-key:29
+
+# synthetic test value: PHP session id shape quoted in the J2 audit report (SEC-J2-17 PoC, same literal as TestDataLikeNames), shortened at HEAD; pushed in 8b4f75a, history not rewritten (no force-push); SEC-J3-1, SEC-J0-14 tracking issue (BLOCKED H1)
+8b4f75a50426880b96a1d335171d1fcd6c8b8d54:security/audit/2026-11-06-J2.md:generic-api-key:319
